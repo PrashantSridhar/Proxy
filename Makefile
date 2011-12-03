@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -g 
+CFLAGS = -g -std=c99
 LDFLAGS = -lpthread
 
 all: proxy
