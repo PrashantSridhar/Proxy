@@ -6,7 +6,6 @@
 #include <pthread.h>
 #include "csapp.h"
 
-#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
@@ -193,7 +192,7 @@ void handleConnection(int connfd){
                 Rio_writen(connfd, buffer, strlen(buffer));
                 Rio_readnb(&server_connection, content, chunksize);
                 Rio_writen(connfd, content, chunksize);
-                printf("%s", content);
+                debug_printf("%s", content);
                 Rio_readlineb(&server_connection, buffer, MAXLINE);
             }
 
@@ -212,7 +211,7 @@ void handleConnection(int connfd){
             while(Rio_readlineb(&server_connection, buffer, MAXLINE) != 0)
             {
                 Rio_writen(connfd, buffer, strlen(buffer));
-                printf("<-\t%s", buffer);
+                debug_printf("<-\t%s", buffer);
             }
             Rio_writen(connfd, "\r\n", strlen("\r\n"));
         }
