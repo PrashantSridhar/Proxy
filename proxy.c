@@ -6,7 +6,6 @@
 #include <pthread.h>
 #include "csapp.h"
 
-#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
@@ -77,7 +76,11 @@ void handleConnection(int connfd){
         //now let's copy out the hostname
         //@TODO: make this not suck
         char hostname[MAXLINE]; //overkill size?
-        char path[MAXLINE]; 
+        char path[MAXLINE];
+
+        bzero(hostname, MAXLINE);
+        bzero(path, MAXLINE);
+
         int port = 80;
         int i = 11; //first character after "GET http://"
         while(buffer[i] &&
@@ -91,7 +94,13 @@ void handleConnection(int connfd){
         {
             sscanf(&buffer[i+1], "%d%s", &port, path);
         }
+        else
+        {
+            sscanf(&buffer[i], "%s", path);
+        }
         hostname[i] = '\0';
+
+
         printf("Trying to contact hostname %s on port %d\n", hostname, port);
         printf("I'll ask him for the path '%s'\n", path);
 
@@ -154,6 +163,8 @@ void handleConnection(int connfd){
             while(sscanf(buffer, "%x", &chunksize) && chunksize > 0)
             {
                 char content[chunksize];
+                bzero(content, chunksize);
+
                 rio_writen(connfd, buffer, strlen(buffer));
                 rio_readnb(&server_connection, content, chunksize);
                 rio_writen(connfd, content, chunksize);
@@ -165,6 +176,8 @@ void handleConnection(int connfd){
         else if(content_length > -1)
         {
             char content[content_length];
+            bzero(content, content_length);
+
             debug_printf("Trying to read %d bytes\n", content_length);
             rio_readnb(&server_connection, content, content_length);
             rio_writen(connfd, content, content_length);
