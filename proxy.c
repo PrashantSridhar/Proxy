@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include "csapp.h"
 
+#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
@@ -22,6 +23,7 @@ void* newConnectionThread(void* arg);
 
 
 int main (int argc, char *argv []){
+	Signal(SIGPIPE, SIG_IGN);
 	int listenfd, connfd, port;
     socklen_t clientlen;
 	struct sockaddr_in clientaddr;
@@ -36,7 +38,7 @@ int main (int argc, char *argv []){
 
 		pthread_t tid;
 		clientlen = sizeof(clientaddr);
-		connfd = Accept(listenfd , (SA *)&clientaddr, &clientlen);
+		connfd = accept(listenfd , (SA *)&clientaddr, &clientlen);
 
         
         int* fd_place = malloc(sizeof(int));
@@ -76,11 +78,7 @@ void handleConnection(int connfd){
         //now let's copy out the hostname
         //@TODO: make this not suck
         char hostname[MAXLINE]; //overkill size?
-        char path[MAXLINE];
-
-        bzero(hostname, MAXLINE);
-        bzero(path, MAXLINE);
-
+        char path[MAXLINE]; 
         int port = 80;
         int i = 11; //first character after "GET http://"
         while(buffer[i] &&
@@ -98,9 +96,8 @@ void handleConnection(int connfd){
         {
             sscanf(&buffer[i], "%s", path);
         }
+
         hostname[i] = '\0';
-
-
         printf("Trying to contact hostname %s on port %d\n", hostname, port);
         printf("I'll ask him for the path '%s'\n", path);
 
@@ -163,8 +160,6 @@ void handleConnection(int connfd){
             while(sscanf(buffer, "%x", &chunksize) && chunksize > 0)
             {
                 char content[chunksize];
-                bzero(content, chunksize);
-
                 rio_writen(connfd, buffer, strlen(buffer));
                 rio_readnb(&server_connection, content, chunksize);
                 rio_writen(connfd, content, chunksize);
@@ -176,8 +171,6 @@ void handleConnection(int connfd){
         else if(content_length > -1)
         {
             char content[content_length];
-            bzero(content, content_length);
-
             debug_printf("Trying to read %d bytes\n", content_length);
             rio_readnb(&server_connection, content, content_length);
             rio_writen(connfd, content, content_length);
