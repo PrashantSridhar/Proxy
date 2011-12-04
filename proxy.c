@@ -164,49 +164,14 @@ void handleConnection(int connfd){
         rio_writen(connfd, "\r\n", strlen("\r\n"));
         
         //@TODO: cache this
-        //@TODO: decide if any of this is necessary. It was before we forced
-        //       HTTP/1.0, but now perhaps not so much. Still good for caching,
-        //       perhaps.
-        //if(chunked_encoding)
-        //{
-        //    printf("Doing chunked encoding\n");
-        //    size_t chunksize;
-        //    rio_readlineb(&server_connection, buffer, MAXLINE);
-        //    while(sscanf(buffer, "%x", &chunksize) && chunksize > 0)
-        //    {
-        //        char content[chunksize];
-        //        memset(content, chunksize, sizeof(char));
-
-        //        rio_writen(connfd, buffer, strlen(buffer));
-        //        rio_readnb(&server_connection, content, chunksize);
-        //        rio_writen(connfd, content, chunksize);
-        //        debug_printf("%s", content);
-        //        rio_readlineb(&server_connection, buffer, MAXLINE);
-        //    }
-
-        //}
-        //else if(content_length > 0)
-        //{
-        //    char* content = calloc(content_length, sizeof(char));
-
-        //    debug_printf("Trying to read %d bytes\n", content_length);
-        //    rio_readnb(&server_connection, content, content_length);
-        //    rio_writen(connfd, content, content_length);
-        //    free(content);
-        //}
-        //else
-        //{
-        //    //no content-length
-        //    printf("No content length and no chunks\n");
-            ssize_t n = 0; //number of bytes
-            while((n=rio_readnb(&server_connection, buffer, MAXLINE)) > 0)
-            {
-                rio_writen(connfd, buffer, n);
-                //debug_printf("<-\t%s", buffer);
-                memset(buffer, MAXLINE, sizeof(char));
-            }
-            //rio_writen(connfd, "\r\n", strlen("\r\n"));
-        //}
+        ssize_t n = 0; //number of bytes
+        while((n=rio_readnb(&server_connection, buffer, MAXLINE)) > 0)
+        {
+            rio_writen(connfd, buffer, n);
+            //debug_printf("<-\t%s", buffer);
+            memset(buffer, MAXLINE, sizeof(char));
+        }
+        //rio_writen(connfd, "\r\n", strlen("\r\n"));
 
         close(server_fd);
 		close(connfd);
