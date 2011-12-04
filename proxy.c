@@ -6,7 +6,6 @@
 #include <pthread.h>
 #include "csapp.h"
 
-#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
@@ -42,16 +41,13 @@ int main (int argc, char *argv []){
 		connfd = accept(listenfd , (SA *)&clientaddr, &clientlen);
 
         
-        //int* fd_place = malloc(sizeof(int));
-        //*fd_place = connfd;
-        //pthread_create(&tid,
-        //               NULL,
-        //               newConnectionThread,
-        //               (void*)fd_place);
-        //pthread_detach(tid);
-        
-
-        handleConnection(connfd);
+        int* fd_place = malloc(sizeof(int));
+        *fd_place = connfd;
+        pthread_create(&tid,
+                       NULL,
+                       newConnectionThread,
+                       (void*)fd_place);
+        pthread_detach(tid);
    }
 }
 void* newConnectionThread(void* arg)
@@ -105,8 +101,8 @@ void handleConnection(int connfd){
         }
 
         hostname[i-11] = '\0';
-        printf("Trying to contact hostname %s on port %d\n", hostname, port);
-        printf("I'll ask him for the path '%s'\n", path);
+        debug_printf("Trying to contact hostname %s on port %d\n", hostname, port);
+        debug_printf("I'll ask him for the path '%s'\n", path);
 
 
         server_fd = open_clientfd(hostname, port);
@@ -156,6 +152,6 @@ void handleConnection(int connfd){
 
         close(server_fd);
 		close(connfd);
-        printf("Closed connection\n");
+        debug_printf("Closed connection\n");
    }
 }
