@@ -47,7 +47,7 @@ int main (int argc, char *argv []){
                        (void*)fd_place);
         
 
-        handleConnection(connfd);
+//        handleConnection(connfd);
    }
 }
 void* newConnectionThread(void* arg)
