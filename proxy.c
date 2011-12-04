@@ -298,7 +298,7 @@ void serveToClient(int connfd, rio_t* server_connection,
 
 
     ssize_t n = 0; //number of bytes
-    while((n=rio_readnb(server_connection, buffer, 1024)) >0)
+    while((n=rio_readnb(server_connection, buffer, MAXLINE)) >0)
     {
         debug_printf("Read %u bytes\n", n);
         if(rio_writen(connfd, buffer, n) < 0)
