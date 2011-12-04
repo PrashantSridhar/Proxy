@@ -133,33 +133,11 @@ void handleConnection(int connfd){
 
 
         //now read from the server back to the client
-        int content_length = -1;
-        int chunked_encoding = 0;
         while(rio_readlineb(&server_connection, buffer, MAXLINE) != 0 && 
                 buffer[0] != '\r')
         {
-            if(strncmp(buffer, 
-                       "Proxy-Connection: keep-alive",
-                       strlen("Proxy-Connection: keep-alive")) == 0)
-            {
-                //skip it
-            }
-            else
-            {
-                debug_printf("<-\t%s", buffer);
-                rio_writen(connfd, buffer, strlen(buffer));
-            }
-
-            
-            //these calls will do nothing on failure
-            if(strncmp(buffer, "Transfer-Encoding: chunked", 26) == 0)
-            {
-                chunked_encoding = 1;
-            }
-            else
-            {
-                sscanf(buffer, "Content-Length: %d", &content_length);
-            }
+            debug_printf("<-\t%s", buffer);
+            rio_writen(connfd, buffer, strlen(buffer));
         }
         rio_writen(connfd, "\r\n", strlen("\r\n"));
         
@@ -167,11 +145,14 @@ void handleConnection(int connfd){
         ssize_t n = 0; //number of bytes
         while((n=rio_readnb(&server_connection, buffer, MAXLINE)) > 0)
         {
-            rio_writen(connfd, buffer, n);
-            //debug_printf("<-\t%s", buffer);
+            if(rio_writen(connfd, buffer, n) == -1)
+            {
+                //error on write
+                break;
+            }
+            debug_printf("<-\t%s", buffer);
             memset(buffer, MAXLINE, sizeof(char));
         }
-        //rio_writen(connfd, "\r\n", strlen("\r\n"));
 
         close(server_fd);
 		close(connfd);
