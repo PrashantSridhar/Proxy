@@ -153,7 +153,7 @@ void handleConnection(int connfd){
 
         ////if we're trying to access the easter egg console,
         ////  then call the easter egg handler and end the function
-        //if((strcmp(hostname, "proxy-configurator.tk") == 0))
+        //if((strcmp(hostname, "proxy-configurator") == 0))
         //{
         //    //this is some fun easter-egg-ing that we can do
         //    easterEgg(connfd, &proxy_client, path);
@@ -172,7 +172,13 @@ void handleConnection(int connfd){
 
 
         //open the connection to the remote server
-        server_fd = open_clientfd(hostname, port);
+        if((server_fd = open_clientfd(hostname, port)) < 0)
+        {
+            char errorbuf[] = "HTTP 404 NOTFOUND\r\n\r\n404 Not Found\r\n";
+            rio_writen(connfd, errorbuf, strlen(errorbuf));
+            close(connfd);
+            return;
+        }
         rio_readinitb(&server_connection, server_fd);
 
         //now, make the GET request to the server
@@ -285,13 +291,18 @@ void serveToClient(int connfd, rio_t* server_connection,
 
 
     ssize_t n = 0; //number of bytes
-    while((n=rio_readnb(server_connection, buffer, MAXLINE)) != 0)
+    while((n=rio_readnb(server_connection, buffer, MAXLINE)) !=  0)
     {
+        printf("Read %u bytes\n", n);
         if(rio_writen(connfd, buffer, n) == -1)
         {
             printf("Error writing from %s%s\n", hostname, path);
             //error on write
-            break;
+            return;
+        }
+        else
+        {
+            debug_printf("\t Wrote %u bytes\n", n);
         }
         verbose_printf("<-\t%s", buffer);
         memset(buffer, '\0', MAXLINE*sizeof(char));
