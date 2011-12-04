@@ -47,9 +47,10 @@ int main (int argc, char *argv []){
                        NULL,
                        newConnectionThread,
                        (void*)fd_place);
+        pthread_detach(tid);
         
 
-//        handleConnection(connfd);
+        //handleConnection(connfd);
    }
 }
 void* newConnectionThread(void* arg)
@@ -62,6 +63,7 @@ void* newConnectionThread(void* arg)
 
 void handleConnection(int connfd){
     char buffer[MAXLINE];
+    memset(buffer, MAXLINE, sizeof(char));
     rio_t proxy_client;
     rio_readinitb(&proxy_client, connfd);
 
@@ -79,6 +81,10 @@ void handleConnection(int connfd){
         //@TODO: make this not suck
         char hostname[MAXLINE]; //overkill size?
         char path[MAXLINE]; 
+
+        memset(hostname, MAXLINE, sizeof(char));
+        memset(path, MAXLINE, sizeof(char));
+
         int port = 80;
         int i = 11; //first character after "GET http://"
         while(buffer[i] &&
@@ -160,6 +166,8 @@ void handleConnection(int connfd){
             while(sscanf(buffer, "%x", &chunksize) && chunksize > 0)
             {
                 char content[chunksize];
+                memset(content, chunksize, sizeof(char));
+
                 rio_writen(connfd, buffer, strlen(buffer));
                 rio_readnb(&server_connection, content, chunksize);
                 rio_writen(connfd, content, chunksize);
@@ -171,6 +179,8 @@ void handleConnection(int connfd){
         else if(content_length > -1)
         {
             char content[content_length];
+            memset(content, content_length, sizeof(char));
+
             debug_printf("Trying to read %d bytes\n", content_length);
             rio_readnb(&server_connection, content, content_length);
             rio_writen(connfd, content, content_length);
@@ -182,9 +192,10 @@ void handleConnection(int connfd){
             while(rio_readlineb(&server_connection, buffer, MAXLINE) != 0)
             {
                 rio_writen(connfd, buffer, strlen(buffer));
-                debug_printf("<-\t%s", buffer);
+                //debug_printf("<-\t%s", buffer);
+                memset(buffer, MAXLINE, sizeof(char));
             }
-            rio_writen(connfd, "\r\n", strlen("\r\n"));
+            //rio_writen(connfd, "\r\n", strlen("\r\n"));
         }
 
         close(server_fd);
