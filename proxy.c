@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include "csapp.h"
 
+#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
@@ -105,7 +106,6 @@ void handleConnection(int connfd){
         //@TODO: make this not suck
         char hostname[MAXLINE]; //overkill size?
         char path[MAXLINE]; 
-        char httpver[MAXLINE]; 
         int port = 80;
         int i = 11; //first character after "GET http://"
         while(buffer[i] &&
@@ -117,11 +117,7 @@ void handleConnection(int connfd){
         }
         if(buffer[i] == ':')
         {
-            sscanf(&buffer[i+1], "%d%s %s", &port, path, httpver);
-        }
-        else
-        {
-            sscanf(&buffer[i], "%s %s", path, httpver);
+            sscanf(&buffer[i+1], "%d%s", &port, path);
         }
         hostname[i] = '\0';
         printf("Trying to contact hostname %s on port %d\n", hostname, port);
@@ -135,23 +131,17 @@ void handleConnection(int connfd){
         Rio_writen(server_fd, "GET ", strlen("GET "));
         Rio_writen(server_fd, path, strlen(path));
         Rio_writen(server_fd, " ", strlen(" "));
-        Rio_writen(server_fd, httpver, strlen(httpver));
+        Rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
         Rio_writen(server_fd, "\r\n", strlen("\r\n"));
 
-        debug_printf("->\t%s%s %s%s", "GET ", path, httpver, "\r\n");
+        debug_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
 
 
         while(Rio_readlineb(&proxy_client, buffer, MAXLINE) && 
                 strncmp(buffer, "\r", 1))
         {
-            //gzip is causing me all kinds of problems, don't tell the server we
-            //can handle it
-            //@TODO: man up and handle gzip
-            if(strncmp(buffer, "Accept-Encoding", 15) != 0)
-            {
-                Rio_writen(server_fd, buffer, strlen(buffer));
-                debug_printf("->\t%s", buffer);
-            }
+            Rio_writen(server_fd, buffer, strlen(buffer));
+            debug_printf("->\t%s", buffer);
         }
         //finish the request
         Rio_writen(server_fd, "\r\n", strlen("\r\n"));
@@ -167,6 +157,7 @@ void handleConnection(int connfd){
             debug_printf("<-\t%s", buffer);
             Rio_writen(connfd, buffer, strlen(buffer));
 
+            
             //these calls will do nothing on failure
             if(strncmp(buffer, "Transfer-Encoding: chunked", 26) == 0)
             {
@@ -180,7 +171,9 @@ void handleConnection(int connfd){
         Rio_writen(connfd, "\r\n", strlen("\r\n"));
         
         //@TODO: cache this
-
+        //@TODO: decide if any of this is necessary. It was before we forced
+        //       HTTP/1.0, but now perhaps not so much. Still good for caching,
+        //       perhaps.
         if(chunked_encoding)
         {
             printf("Doing chunked encoding\n");
