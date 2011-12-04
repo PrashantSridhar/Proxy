@@ -23,7 +23,8 @@ void* newConnectionThread(void* arg);
 
 
 int main (int argc, char *argv []){
-	Signal(SIGPIPE, SIG_IGN);
+	//@TODO: sigactions
+	signal(SIGPIPE, SIG_IGN);
 	int listenfd, connfd, port;
     socklen_t clientlen;
 	struct sockaddr_in clientaddr;
@@ -102,7 +103,7 @@ void handleConnection(int connfd){
         printf("I'll ask him for the path '%s'\n", path);
 
 
-        server_fd = Open_clientfd(hostname, port);
+        server_fd = open_clientfd(hostname, port);
         rio_readinitb(&server_connection, server_fd);
 
         //make the GET request
@@ -171,7 +172,7 @@ void handleConnection(int connfd){
         else if(content_length > -1)
         {
             char content[content_length];
-            debug_printf("Trying to read %d bytes\n", content_length);
+            //debug_printf("Trying to read %d bytes\n", content_length);
             rio_readnb(&server_connection, content, content_length);
             rio_writen(connfd, content, content_length);
         }
