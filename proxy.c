@@ -6,11 +6,19 @@
 #include <pthread.h>
 #include "csapp.h"
 
+#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
 #define debug_printf(...) printf(__VA_ARGS__)
 #endif
+
+#ifndef VERBOSE
+#define verbose_printf(...) {}
+#else
+#define verbose_printf(...) printf(__VA_ARGS__)
+#endif
+
 
 
 //for handling the connection
@@ -21,6 +29,14 @@ void* newConnectionThread(void* arg);
 void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port);
 //make a GET request to the server
 void makeGETRequest(char* hostname, 
+                    char* path,
+                    int port,
+                    rio_t* proxy_client,
+                    int server_fd,
+                    int hackingmode);
+//make a POST request to the server
+//currently experimental
+void makePOSTRequest(char* hostname, 
                     char* path,
                     int port,
                     rio_t* proxy_client,
@@ -181,9 +197,58 @@ void handleConnection(int connfd){
 
         //clean up
         close(server_fd);
+    	close(connfd);
+        debug_printf("Closed connection to %s%s\n", hostname, path);
+    }
+    else if(postrequest)
+    {
+        //we've got a get request
+        debug_printf("Executing a POST request\n");
+
+        //parse the URL (hostname, path, and port) from the first line
+        char hostname[MAXLINE];
+        char path[MAXLINE];
+        int port=80;
+        parseURL(buffer, hostname, path, &port);
+
+        //if we're trying to access the easter egg console,
+        //  then call the easter egg handler and end the function
+        if((strcmp(hostname, "proxy-configurator.tk") == 0))
+        {
+            //this is some fun easter-egg-ing that we can do
+            easterEgg(connfd, &proxy_client, path);
+            //and done
+            return;
+        }
+
+        //do silly things based on the status of easter eggs
+        int hackingmode=0;
+        handleEasterEgg(hostname, path, &port, &hackingmode);
+
+        
+        //some debug statements
+        debug_printf("Trying to contact hostname %s on port %d\n",
+                      hostname, port);
+        debug_printf("I'll ask him for the path '%s'\n", path);
+
+
+        //open the connection to the remote server
+        server_fd = open_clientfd(hostname, port);
+        rio_readinitb(&server_connection, server_fd);
+
+        //now, make the POST request to the server
+        makePOSTRequest(hostname, path, port,
+                       &proxy_client, server_fd, hackingmode);
+
+
+        //now read from the server back to the client
+        serveToClient(connfd, &server_connection, hostname, path, hackingmode);
+
+        //clean up
+        close(server_fd);
 		close(connfd);
         debug_printf("Closed connection\n");
-   }
+    }
 }
 
 //parse a URL and set the hostname and path into the given buffers
@@ -195,9 +260,9 @@ void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port)
     memset(path, '\0', MAXLINE*sizeof(char));
 
     int i = 11; //first character after "GET http://"
-    if(buffer[i] == '/')
+    while(buffer[i] == '/')
     {
-        i++; //account for https by ignoring it
+        i++; //this accounts for GET/POST and https
     }
     while(buffer[i] &&
             (buffer[i] != '/') &&
@@ -227,7 +292,7 @@ void copyRequest(int server_fd, rio_t* proxy_client)
             strncmp(buffer, "\r", 1))
     {
         rio_writen(server_fd, buffer, strlen(buffer));
-        debug_printf("->\t%s", buffer);
+        verbose_printf("->\t%s", buffer);
     }
 }
 
@@ -245,7 +310,7 @@ void makeGETRequest(char* hostname,
     rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
     rio_writen(server_fd, "\r\n", strlen("\r\n"));
 
-    debug_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
+    verbose_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
 
 
     if(hackingmode
@@ -262,6 +327,46 @@ void makeGETRequest(char* hostname,
     rio_writen(server_fd, "\r\n", strlen("\r\n"));
 }
 
+//EXPERIMENTAL POST request maker
+void makePOSTRequest(char* hostname, 
+                    char* path,
+                    int port,
+                    rio_t* proxy_client,
+                    int server_fd,
+                    int hackingmode)
+{
+    //make the GET request
+    rio_writen(server_fd, "POST ", strlen("GET "));
+    rio_writen(server_fd, path, strlen(path));
+    rio_writen(server_fd, " ", strlen(" "));
+    rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
+    rio_writen(server_fd, "\r\n", strlen("\r\n"));
+
+    verbose_printf("->\t%s%s HTTP/1.0 \r\n", "POST ", path);
+
+
+    if(hackingmode
+       && (strncmp(hostname, "www.facebook.com", 16) == 0)
+       && (strncmp(path, "/", 1) == 0))
+    {
+        copyRequestNoGzip(server_fd, proxy_client);
+    }
+    else
+    {
+        copyRequest(server_fd, proxy_client);
+    }
+
+    //finish the headers
+    rio_writen(server_fd, "\r\n", strlen("\r\n"));
+
+
+    //we're going to assume that there is only one line of data, limited
+    //implementation...
+    char buffer[MAXLINE];
+    rio_readlineb(proxy_client, buffer, MAXLINE);
+    rio_writen(server_fd, buffer, strlen(buffer));
+}
+
 void serveToClient(int connfd, rio_t* server_connection, 
         char* hostname, char* path, int hackingmode)
 {
@@ -269,10 +374,9 @@ void serveToClient(int connfd, rio_t* server_connection,
     while(rio_readlineb(server_connection, buffer, MAXLINE) != 0 && 
             buffer[0] != '\r')
     {
-        debug_printf("<-\t%s", buffer);
+        verbose_printf("<-\t%s", buffer);
         rio_writen(connfd, buffer, strlen(buffer));
     }
-    //@TODO: do I need this line?
     rio_writen(connfd, "\r\n", strlen("\r\n"));
     
     if(hackingmode && (strncmp(hostname, "www.facebook.com", 16) == 0)
@@ -283,15 +387,30 @@ void serveToClient(int connfd, rio_t* server_connection,
     else
     {
         //@TODO: cache this
+
+        /****************
+              ____  _____ _____  ____  __ _____ 
+             / __ \|  ___|_ _\ \/ /  \/  | ____|
+            / / _` | |_   | | \  /| |\/| |  _|  
+           | | (_| |  _|  | | /  \| |  | | |___ 
+            \ \__,_|_|   |___/_/\_\_|  |_|_____|
+             \____/   This is the root of the proxy's slowness.
+             Figure out what's wrong with these reads (it goes through one
+             iteration of the loop, then hangs until the connection times out,
+             then does another iteration), and the proxy will work just fine.
+       ************/
+
+
         ssize_t n = 0; //number of bytes
-        while((n=rio_readnb(server_connection, buffer, MAXLINE)) > 0)
+        while((n=rio_readnb(server_connection, buffer, MAXLINE)) != 0)
         {
             if(rio_writen(connfd, buffer, n) == -1)
             {
+                printf("Error writing from %s%s\n", hostname, path);
                 //error on write
                 break;
             }
-            debug_printf("<-\t%s", buffer);
+            verbose_printf("<-\t%s", buffer);
             memset(buffer, '\0', MAXLINE*sizeof(char));
         }
     }
@@ -356,7 +475,7 @@ void fbsniffReadback(int connfd, rio_t* server_connection)
             //error on write
             break;
         }
-        debug_printf("<-\t%s", buffer);
+        verbose_printf("<-\t%s", buffer);
         memset(buffer, '\0', MAXLINE*sizeof(char));
     }
 }
@@ -469,7 +588,7 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
 
         snprintf(dynamiccontent, MAXLINE, 
                                 "<table style='border-left: 1px black solid' >"
-                                "<tr><td>Lockout:</td><td>%s</td></tr>"
+                                "<tr><td>NOPE Mode:</td><td>%s</td></tr>"
                                 "<tr><td>Rickroll:</td><td>%s</td></tr>"
                                 "<tr><td>Facebook Sniffer:</td><td>%s</td></tr>"
                                 "</table>",
@@ -544,7 +663,7 @@ void copyRequestNoGzip(int server_fd, rio_t* proxy_client)
         if(strncmp(buffer, "Accept-Encoding:", 16))
         {
             rio_writen(server_fd, buffer, strlen(buffer));
-            debug_printf("->\t%s", buffer);
+            verbose_printf("->\t%s", buffer);
         }
     }
 }
