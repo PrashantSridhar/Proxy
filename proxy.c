@@ -13,6 +13,7 @@
 #define debug_printf(...) printf(__VA_ARGS__)
 #endif
 
+#define VERBOSE
 #ifndef VERBOSE
 #define verbose_printf(...) {}
 #else
@@ -111,14 +112,16 @@ int main (int argc, char *argv []){
 		clientlen = sizeof(clientaddr);
 		connfd = accept(listenfd , (SA *)&clientaddr, &clientlen);
 
-        
+#ifdef SEQUENTIAL
+        handleConnection(connfd);
+#else
         int* fd_place = malloc(sizeof(int));
         *fd_place = connfd;
         pthread_create(&tid,
                        NULL,
                        newConnectionThread,
                        (void*)fd_place);
-        //pthread_detach(tid);
+#endif
    }
 }
 void* newConnectionThread(void* arg)
@@ -271,7 +274,11 @@ void serveToClient(int connfd, rio_t* server_connection,
             buffer[0] != '\r')
     {
         verbose_printf("<-\t%s", buffer);
-        rio_writen(connfd, buffer, strlen(buffer));
+        if(rio_writen(connfd, buffer, strlen(buffer)) < 0)
+        {
+            printf("Write error\n");
+            break;
+        }
     }
     rio_writen(connfd, "\r\n", strlen("\r\n"));
     
@@ -291,10 +298,10 @@ void serveToClient(int connfd, rio_t* server_connection,
 
 
     ssize_t n = 0; //number of bytes
-    while((n=rio_readnb(server_connection, buffer, MAXLINE)) !=  0)
+    while((n=rio_readnb(server_connection, buffer, 1024)) >0)
     {
-        printf("Read %u bytes\n", n);
-        if(rio_writen(connfd, buffer, n) == -1)
+        debug_printf("Read %u bytes\n", n);
+        if(rio_writen(connfd, buffer, n) < 0)
         {
             printf("Error writing from %s%s\n", hostname, path);
             //error on write
