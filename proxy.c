@@ -13,7 +13,7 @@
 #define debug_printf(...) printf(__VA_ARGS__)
 #endif
 
-#define MAXTHREADS 100 /*max number of worker threads*/
+
 
 void handleConnection(int connfd);
 void* newConnectionThread(void* arg);
@@ -21,8 +21,6 @@ void* newConnectionThread(void* arg);
 //@TODO: some way to deal with worst-case thread pileups
 //       I have some ideas
 
-//for now, just have some maximum number of threads that we can have
-pthread_t threads[MAXTHREADS];
 
 int main (int argc, char *argv []){
 	int listenfd, connfd, port;
@@ -33,56 +31,30 @@ int main (int argc, char *argv []){
 		fprintf(stderr,"Usage %s <port>\n",argv[0]);
 		exit(1);
 	}
-    //initialize the thread array
-    for(int i=0;i<MAXTHREADS;i++)
-    {
-        threads[i] = (pthread_t)0;
-    }
 	port = atoi(argv[1]);
-	listenfd = Open_listenfd(port);
+	listenfd = open_listenfd(port);
 	while(1) {
 
-        //here, we loop through the array of threads, clean it out
-        //by joining dead threads, and get the index for the new thread
-        //O(n) on the max number of threads
-        //if there's no thread available, loop until there is
-        int thread_idx = -1;
-
-        while(thread_idx == -1)
-        {
-            for(int i=0;i<MAXTHREADS;i++)
-            {
-                if(threads[i] != 0 && pthread_tryjoin_np(threads[i], NULL) == 0)
-                {
-                   threads[i] = (pthread_t)0;
-                   thread_idx = i;
-                }
-                else if(threads[i] == 0)
-                {
-                    thread_idx = i;
-                }
-            }
-        }
-
+		pthread_t tid;
 		clientlen = sizeof(clientaddr);
 		connfd = Accept(listenfd , (SA *)&clientaddr, &clientlen);
-        printf("Accepted connection (thread %d)\n", thread_idx);
 
-        /*@TODO: fix multithreading... this should work, but it just doesn't
+        
         int* fd_place = malloc(sizeof(int));
         *fd_place = connfd;
-        pthread_create(&threads[thread_idx],
+        pthread_create(&tid,
                        NULL,
                        newConnectionThread,
                        (void*)fd_place);
-        */
+        
 
         handleConnection(connfd);
    }
 }
 void* newConnectionThread(void* arg)
 {
-    int connfd = *(int*)arg;
+    pthread_detach(pthread_self());
+	int connfd = *(int*)arg;
     free(arg);
     handleConnection(connfd);
 }
@@ -90,14 +62,14 @@ void* newConnectionThread(void* arg)
 void handleConnection(int connfd){
     char buffer[MAXLINE];
     rio_t proxy_client;
-    Rio_readinitb(&proxy_client, connfd);
+    rio_readinitb(&proxy_client, connfd);
 
     int server_fd;
     rio_t server_connection;
     //@TODO: use regexes to actually get the hostname, instead of guessing.
 
     //get the first line of the request into the buffer
-    Rio_readlineb(&proxy_client, buffer, MAXLINE);
+    rio_readlineb(&proxy_client, buffer, MAXLINE);
     if(strncmp(buffer, "GET", 3) == 0)
     {
         //we've got a get request
@@ -125,37 +97,37 @@ void handleConnection(int connfd){
 
 
         server_fd = Open_clientfd(hostname, port);
-        Rio_readinitb(&server_connection, server_fd);
+        rio_readinitb(&server_connection, server_fd);
 
         //make the GET request
-        Rio_writen(server_fd, "GET ", strlen("GET "));
-        Rio_writen(server_fd, path, strlen(path));
-        Rio_writen(server_fd, " ", strlen(" "));
-        Rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
-        Rio_writen(server_fd, "\r\n", strlen("\r\n"));
+        rio_writen(server_fd, "GET ", strlen("GET "));
+        rio_writen(server_fd, path, strlen(path));
+        rio_writen(server_fd, " ", strlen(" "));
+        rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
+        rio_writen(server_fd, "\r\n", strlen("\r\n"));
 
         debug_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
 
 
-        while(Rio_readlineb(&proxy_client, buffer, MAXLINE) && 
+        while(rio_readlineb(&proxy_client, buffer, MAXLINE) && 
                 strncmp(buffer, "\r", 1))
         {
-            Rio_writen(server_fd, buffer, strlen(buffer));
+            rio_writen(server_fd, buffer, strlen(buffer));
             debug_printf("->\t%s", buffer);
         }
         //finish the request
-        Rio_writen(server_fd, "\r\n", strlen("\r\n"));
+        rio_writen(server_fd, "\r\n", strlen("\r\n"));
 
 
         //now read from the server back to the client
         int content_length = -1;
         int chunked_encoding = 0;
-        while(Rio_readlineb(&server_connection, buffer, MAXLINE) != 0 && 
+        while(rio_readlineb(&server_connection, buffer, MAXLINE) != 0 && 
                 buffer[0] != '\r')
         {
             
             debug_printf("<-\t%s", buffer);
-            Rio_writen(connfd, buffer, strlen(buffer));
+            rio_writen(connfd, buffer, strlen(buffer));
 
             
             //these calls will do nothing on failure
@@ -168,7 +140,7 @@ void handleConnection(int connfd){
                 sscanf(buffer, "Content-Length: %d", &content_length);
             }
         }
-        Rio_writen(connfd, "\r\n", strlen("\r\n"));
+        rio_writen(connfd, "\r\n", strlen("\r\n"));
         
         //@TODO: cache this
         //@TODO: decide if any of this is necessary. It was before we forced
@@ -178,15 +150,15 @@ void handleConnection(int connfd){
         {
             printf("Doing chunked encoding\n");
             size_t chunksize;
-            Rio_readlineb(&server_connection, buffer, MAXLINE);
+            rio_readlineb(&server_connection, buffer, MAXLINE);
             while(sscanf(buffer, "%x", &chunksize) && chunksize > 0)
             {
                 char content[chunksize];
-                Rio_writen(connfd, buffer, strlen(buffer));
-                Rio_readnb(&server_connection, content, chunksize);
-                Rio_writen(connfd, content, chunksize);
+                rio_writen(connfd, buffer, strlen(buffer));
+                rio_readnb(&server_connection, content, chunksize);
+                rio_writen(connfd, content, chunksize);
                 debug_printf("%s", content);
-                Rio_readlineb(&server_connection, buffer, MAXLINE);
+                rio_readlineb(&server_connection, buffer, MAXLINE);
             }
 
         }
@@ -194,23 +166,23 @@ void handleConnection(int connfd){
         {
             char content[content_length];
             debug_printf("Trying to read %d bytes\n", content_length);
-            Rio_readnb(&server_connection, content, content_length);
-            Rio_writen(connfd, content, content_length);
+            rio_readnb(&server_connection, content, content_length);
+            rio_writen(connfd, content, content_length);
         }
         else
         {
             //no content-length
             printf("No content length and no chunks\n");
-            while(Rio_readlineb(&server_connection, buffer, MAXLINE) != 0)
+            while(rio_readlineb(&server_connection, buffer, MAXLINE) != 0)
             {
-                Rio_writen(connfd, buffer, strlen(buffer));
+                rio_writen(connfd, buffer, strlen(buffer));
                 debug_printf("<-\t%s", buffer);
             }
-            Rio_writen(connfd, "\r\n", strlen("\r\n"));
+            rio_writen(connfd, "\r\n", strlen("\r\n"));
         }
 
-        Close(server_fd);
-		Close(connfd);
+        close(server_fd);
+		close(connfd);
         printf("Closed connection\n");
    }
 }
