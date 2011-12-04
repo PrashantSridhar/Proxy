@@ -118,7 +118,7 @@ int main (int argc, char *argv []){
                        NULL,
                        newConnectionThread,
                        (void*)fd_place);
-        pthread_detach(tid);
+        //pthread_detach(tid);
    }
 }
 void* newConnectionThread(void* arg)
