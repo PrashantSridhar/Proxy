@@ -13,7 +13,6 @@
 #define debug_printf(...) printf(__VA_ARGS__)
 #endif
 
-#define VERBOSE
 #ifndef VERBOSE
 #define verbose_printf(...) {}
 #else
@@ -54,9 +53,7 @@ void serveToClient(int connfd, rio_t* server_connection,
 void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE]);
 //change the host, request, and port based on egg settings
 void handleEasterEgg(char* hostname, char* path, int* port);
-void fbsniffReadback(int connfd, rio_t* server_connection);
 //this version ignores Accept-Encoding: gzip
-void copyRequestNoGzip(int server_fd, rio_t* proxy_client);
 
 /******
  * Mutexes
@@ -239,8 +236,11 @@ void copyRequest(int server_fd, rio_t* proxy_client)
     while(rio_readlineb(proxy_client, buffer, MAXLINE) && 
             strncmp(buffer, "\r", 1))
     {
-        rio_writen(server_fd, buffer, strlen(buffer));
-        verbose_printf("->\t%s", buffer);
+        if(strncmp(buffer, "Proxy-Connection: ", 18))
+        {
+            rio_writen(server_fd, buffer, strlen(buffer));
+            verbose_printf("->\t%s", buffer);
+        }
     }
 }
 
