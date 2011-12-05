@@ -66,9 +66,6 @@ void serveToClient(int connfd, rio_t* server_connection,
 void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE]);
 //change the host, request, and port based on egg settings
 void handleEasterEgg(char* hostname, char* path, int* port);
-void fbsniffReadback(int connfd, rio_t* server_connection);
-//this version ignores Accept-Encoding: gzip
-void copyRequestNoGzip(int server_fd, rio_t* proxy_client);
 
 /* 
  * Cache Functions
@@ -224,18 +221,18 @@ void handleConnection(int connfd){
         int port=80;
         parseURL(buffer, hostname, path, &port);
 
-        ////if we're trying to access the easter egg console,
-        ////  then call the easter egg handler and end the function
-        //if((strcmp(hostname, "proxy-configurator") == 0))
-        //{
-        //    //this is some fun easter-egg-ing that we can do
-        //    easterEgg(connfd, &proxy_client, path);
-        //    //and done
-        //    return;
-        //}
+        //if we're trying to access the easter egg console,
+        //  then call the easter egg handler and end the function
+        if((strcmp(hostname, "proxy-configurator") == 0))
+        {
+            //this is some fun easter-egg-ing that we can do
+            easterEgg(connfd, &proxy_client, path);
+            //and done
+            return;
+        }
 
-        ////do silly things based on the status of easter eggs
-        //handleEasterEgg(hostname, path, &port);
+        //do silly things based on the status of easter eggs
+        handleEasterEgg(hostname, path, &port);
 
         
         //some debug statements
@@ -354,19 +351,6 @@ void serveToClient(int connfd, rio_t* server_connection,
     
     //@TODO: cache this
 
-    /****************
-          ____  _____ _____  ____  __ _____ 
-         / __ \|  ___|_ _\ \/ /  \/  | ____|
-        / / _` | |_   | | \  /| |\/| |  _|  
-       | | (_| |  _|  | | /  \| |  | | |___ 
-        \ \__,_|_|   |___/_/\_\_|  |_|_____|
-         \____/   This is the root of the proxy's slowness.
-         Figure out what's wrong with these reads (it goes through one
-         iteration of the loop, then hangs until the connection times out,
-         then does another iteration), and the proxy will work just fine.
-   ************/
-
-
     ssize_t n = 0; //number of bytes
     while((n=rio_readnb(server_connection, buffer, MAXLINE)) >0)
     {
@@ -480,6 +464,16 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
                           "Location: /\r\n\r\n";
         rio_writen(connfd, header, strlen(header));
     }
+    else if(strncmp(path, "/info", 5)==0)
+    {
+        char header[] = "HTTP/1.0 200 OK\r\n"
+                          "Content-Type: text/html\r\n\r\n";
+        rio_writen(connfd, header, strlen(header));
+
+        char response[] = "<title>Proxy Diagnostic Page</title>"
+                          "<h1>Cache Diagnostics</h1><hr />";
+        rio_writen(connfd, response, strlen(response));
+    }
     //other conditions here
     else
     {
@@ -487,7 +481,8 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
                           "Content-Type: text/html\r\n\r\n";
         rio_writen(connfd, header, strlen(header));
 
-        char response[] = "<h1>Easter Egg Manager</h1><hr />"
+        char response[] = "<title>Easter Egg Manager</title>"
+                          "<h1>Easter Egg Manager</h1><hr />"
                           "<b>The settings:</b><br /><br />";
         rio_writen(connfd, response, strlen(response));
 
