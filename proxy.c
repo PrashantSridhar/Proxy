@@ -58,7 +58,7 @@ void serveToClient(int connfd, rio_t* server_connection,
 //take over the connection and print the feature console
 void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE]);
 //change the host, request, and port based on feature settings
-void handleFeatures(char* hostname, char* path, int* port);
+int handleFeatures(char* hostname, char* path, int* port);
 
 /* 
  * Cache Functions
@@ -88,6 +88,8 @@ struct features_t
     int nope;
     //rickroll mode: redirect all youtube watch requests to rick astley
     int rickroll;
+    //caching: disable caching for debugging or for dynamic browsing
+    int cache;
 };
 struct features_t ft_config;;
 
@@ -167,6 +169,7 @@ int main (int argc, char *argv []){
     //don't lock because it doesn't matter here (no threads)
     ft_config.nope = 0;
     ft_config.rickroll = 0;
+    ft_config.cache = 1;
 
 
     //initialize mutexes
@@ -231,7 +234,7 @@ void handleConnection(int connfd){
         }
 
         //do silly things based on the status of features
-        handleFeatures(hostname, path, &port);
+        int shouldcache = handleFeatures(hostname, path, &port);
 
         
         //some debug statements
@@ -425,7 +428,8 @@ void serveToClient(int connfd, rio_t* server_connection,
  ** Feature Functions
  ** Not related to the core functionality of the proxy
  *************/
-void handleFeatures(char* hostname, char* path, int* port)
+//returns whether or not caching is enabled
+int handleFeatures(char* hostname, char* path, int* port)
 {
     //@TODO: reader/writer lock on features
     struct features_t features;
@@ -451,6 +455,7 @@ void handleFeatures(char* hostname, char* path, int* port)
             sprintf(path, "/watch?v=oHg5SJYRHA0\0");
         }
     }
+    return features.cache;
 }
 void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
 {
@@ -488,7 +493,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                           "Location: /\r\n\r\n";
         rio_writen(connfd, header, strlen(header));
     }
-    else if(strncmp(path, "/set/rickroll", 8)==0)
+    else if(strncmp(path, "/set/rickroll", 13)==0)
     {
         printf("Setting rickroll mode\n");
         //set rickroll
@@ -501,13 +506,41 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                           "Location: /\r\n\r\n";
         rio_writen(connfd, header, strlen(header));
     }
-    else if(strncmp(path, "/set/norickroll", 10)==0)
+    else if(strncmp(path, "/set/norickroll", 15)==0)
     {
         printf("Unsetting rickroll mode\n");
         //clear rickroll
         pthread_mutex_lock(&features_mutex);
         ft_config.rickroll = 0;
         pthread_mutex_unlock(&features_mutex);
+
+        //and return to the status page
+        char header[] = "HTTP/1.0 302 Found\r\n"
+                          "Location: /\r\n\r\n";
+        rio_writen(connfd, header, strlen(header));
+    }
+    else if(strncmp(path, "/set/cache", 10)==0)
+    {
+        printf("Setting cache on\n");
+        //set cache
+        pthread_mutex_lock(&features_mutex);
+        ft_config.cache = 1;
+        pthread_mutex_unlock(&features_mutex);
+
+        //and return to the status page
+        char header[] = "HTTP/1.0 302 Found\r\n"
+                          "Location: /\r\n\r\n";
+        rio_writen(connfd, header, strlen(header));
+    }
+    else if(strncmp(path, "/set/nocache", 12)==0)
+    {
+        printf("Setting cache off\n");
+        //clear cache mode
+        pthread_mutex_lock(&features_mutex);
+        ft_config.cache = 0;
+        pthread_mutex_unlock(&features_mutex);
+
+        //@TODO: clear the cache here
 
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
@@ -545,9 +578,11 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
 
         snprintf(dynamiccontent, MAXLINE, 
                                 "<table style='border-left: 1px black solid' >"
+                                "<tr><td>Caching Enabled:</td><td>%s</td></tr>"
                                 "<tr><td>NOPE Mode:</td><td>%s</td></tr>"
                                 "<tr><td>Rickroll:</td><td>%s</td></tr>"
                                 "</table>",
+                                (ft_config.cache)?"yes":"no",
                                 (ft_config.nope)?"on":"off",
                                 (ft_config.rickroll)?"on":"off");
 
@@ -575,6 +610,14 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                          "</style>"
                          "<br /><table class='options'>"
                          "<tr>"
+                         "  <td><a href='/set/cache'>"
+                         "      Turn Caching On"
+                         "  </a></td>"
+                         "  <td><a href='/set/nocache'>"
+                         "      Turn Caching Off"
+                         "  </a></td>"
+                         "</tr>"
+                         "<tr>"
                          "  <td><a href='/set/nope'>Engage NOPE</a></td>"
                          "  <td><a href='/set/unnope'>Disengage NOPE</a></td>"
                          "</tr>"
@@ -585,8 +628,6 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                          "  <td><a href='/set/norickroll'>"
                          "      Disengage Rickroll"
                          "  </a></td>"
-                         "</tr>"
-                         "<tr>"
                          "</tr>"
                          "</table>";
         rio_writen(connfd, options, strlen(options));
