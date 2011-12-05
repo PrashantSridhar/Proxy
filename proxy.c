@@ -73,7 +73,7 @@ object* query_cache(char *header);
 void grow_cache();
 
 
-pthread_rwlock lock;
+pthread_rwlock_t lock;
 
 
 /*****
@@ -103,13 +103,18 @@ void add_object(object *o)
 	pthread_rwlock_unlock(&lock);
 }
 
+void grow_cache()
+{
+    //@TODO: this
+}
+
 void make_space(size_t size){
-	
+    /*
 	while(cacheSize >= 1<<20 - size)
 	{
 		int i = 0;
 		for(i=0;i<cacheLength
-	}
+	}*/
 }
 
 
@@ -123,7 +128,7 @@ int open_clientfd_r(char *hostname, int port)
 		return -1; /* check errno for cause of error */
 	
     /* Fill in the server's IP address and port */
-    if ((hp = gethostbyname_r(hostname)) == NULL)
+    if ((hp = gethostbyname(hostname)) == NULL)
 		return -2; /* check h_errno for cause of error */
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
