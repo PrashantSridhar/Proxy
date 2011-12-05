@@ -41,6 +41,7 @@ void* newConnectionThread(void* arg);
 //get the hostname and path from a URL
 void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port);
 //make a GET request to the server
+//returns whether or not the headers think it's a good idea to cache
 void makeGETRequest(char* hostname, 
                     char* path,
                     int port,
@@ -50,7 +51,7 @@ void makeGETRequest(char* hostname,
 void copyRequest(int server_fd, rio_t* proxy_client);
 //read back from the server to the client
 void serveToClient(int connfd, rio_t* server_connection, 
-        char* hostname, char* path);
+        char* hostname, char* path, int cachestatus);
 
 
 
@@ -233,8 +234,9 @@ void handleConnection(int connfd){
             return;
         }
 
-        //do silly things based on the status of features
-        int shouldcache = handleFeatures(hostname, path, &port);
+        //manipulate the request based on the features
+        //get the cache status: 1 = dumb, 2 = smart, 0 = off
+        int cachestatus = handleFeatures(hostname, path, &port);
 
         
         //some debug statements
@@ -255,11 +257,11 @@ void handleConnection(int connfd){
 
         //now, make the GET request to the server
         makeGETRequest(hostname, path, port,
-                       &proxy_client, server_fd);
+                               &proxy_client, server_fd);
 
-
+        
         //now read from the server back to the client
-        serveToClient(connfd, &server_connection, hostname, path);
+        serveToClient(connfd, &server_connection, hostname, path, cachestatus);
 
         //clean up
         close(server_fd);
@@ -310,7 +312,9 @@ void copyRequest(int server_fd, rio_t* proxy_client)
     while(rio_readlineb(proxy_client, buffer, MAXLINE) && 
             strncmp(buffer, "\r", 1))
     {
-        if(strncmp(buffer, "Proxy-Connection: ", 18))
+        //don't send proxy-connection or cache-control headers
+        if((strncmp(buffer, "Proxy-Connection: ", 18) != 0)
+           && (strncmp(buffer, "Cache-Control: ", 14) != 0))
         {
             rio_writen(server_fd, buffer, strlen(buffer));
             verbose_printf("->\t%s", buffer);
@@ -342,13 +346,15 @@ void makeGETRequest(char* hostname,
 }
 
 void serveToClient(int connfd, rio_t* server_connection, 
-        char* hostname, char* path)
+        char* hostname, char* path, int cachestatus)
 {
+    int shouldcache = 0; //smart caching: do the headers say we should cache?
+
+    //we'll build up this cache object
     object* cacheobj = malloc(sizeof(object));
     //read into here, then copy the right amount into dynamic memory
     char tempbuffer[MAX_OBJECT_SIZE];
     ssize_t bufferpos=0;
-
 
     char buffer[MAXLINE];
 
@@ -373,8 +379,29 @@ void serveToClient(int connfd, rio_t* server_connection,
             memcpy(&tempbuffer[bufferpos], buffer, n);
             bufferpos += n;
         }
+
+        //see if the header says anything about caching
+        //this will do nothing if there's no match
+        if(shouldcache >= 0)
+        {
+            sscanf(buffer, "Cache-Control: max-age=%d", &shouldcache);
+        }
+
+        //if the headers say explicitly that we shouldn't cache, then absolutely
+        //don't cache.
+        if(strncmp(buffer, "Cache-Control: private", 22)
+           || strncmp(buffer, "Cache-Control: no-cache", 23))
+        {
+            shouldcache = -1;
+        }
     }
     rio_writen(connfd, "\r\n", strlen("\r\n"));
+
+    //if we're absolutely not caching, then set shouldcache to false
+    if(shouldcache == -1)
+    {
+        shouldcache = 0;
+    }
     
     //@TODO: cache this
 
@@ -410,12 +437,36 @@ void serveToClient(int connfd, rio_t* server_connection,
         cacheobj->data = malloc(bufferpos-1 * sizeof(char));
         memcpy(cacheobj->data, tempbuffer, bufferpos-1);
 
-        //@TODO: uncomment
-        //add_object(cacheobj);
+        if(cachestatus == 1) //1 = cache, 2 = smart cache, 0 = don't cache
+        {
+            //@TODO: uncomment
+            //add_object(cacheobj);
+        }
+        else if(cachestatus == 2)
+        {
+            if(shouldcache)
+            {
+                //@TODO: uncomment
+                //add_object(cacheobj)
 
-        //@TODO: delete
-        free(cacheobj->data);
-        free(cacheobj);
+                //@TODO: delete this
+                free(cacheobj->data);
+                free(cacheobj);
+            }
+            else
+            {
+                //smart caching says no
+                debug_printf("Smart cache: skipping the cache\n");
+                free(cacheobj->data);
+                free(cacheobj);
+            }
+        }
+        else
+        {
+            debug_printf("Cache disabled: skipping the cache\n");
+            free(cacheobj->data);
+            free(cacheobj);
+        }
     }
     else
     {
@@ -519,12 +570,25 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                           "Location: /\r\n\r\n";
         rio_writen(connfd, header, strlen(header));
     }
-    else if(strncmp(path, "/set/cache", 10)==0)
+    else if(strncmp(path, "/set/cache/dumb", 15)==0)
     {
-        printf("Setting cache on\n");
+        printf("Setting dumb cache\n");
         //set cache
         pthread_mutex_lock(&features_mutex);
         ft_config.cache = 1;
+        pthread_mutex_unlock(&features_mutex);
+
+        //and return to the status page
+        char header[] = "HTTP/1.0 302 Found\r\n"
+                          "Location: /\r\n\r\n";
+        rio_writen(connfd, header, strlen(header));
+    }
+    else if(strncmp(path, "/set/cache/smart", 16)==0)
+    {
+        printf("Setting smart cache\n");
+        //set cache
+        pthread_mutex_lock(&features_mutex);
+        ft_config.cache = 2;
         pthread_mutex_unlock(&features_mutex);
 
         //and return to the status page
@@ -578,11 +642,12 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
 
         snprintf(dynamiccontent, MAXLINE, 
                                 "<table style='border-left: 1px black solid' >"
-                                "<tr><td>Caching Enabled:</td><td>%s</td></tr>"
+                                "<tr><td>Caching Mode:</td><td>%s</td></tr>"
                                 "<tr><td>NOPE Mode:</td><td>%s</td></tr>"
                                 "<tr><td>Rickroll:</td><td>%s</td></tr>"
                                 "</table>",
-                                (ft_config.cache)?"yes":"no",
+                                (ft_config.cache)?
+                                  ((ft_config.cache == 2)?"smart":"dumb"):"off",
                                 (ft_config.nope)?"on":"off",
                                 (ft_config.rickroll)?"on":"off");
 
@@ -610,12 +675,23 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                          "</style>"
                          "<br /><table class='options'>"
                          "<tr>"
-                         "  <td><a href='/set/cache'>"
-                         "      Turn Caching On"
+                         "  <td><a href='/set/cache/dumb'>"
+                         "      Engage Dumb Caching"
                          "  </a></td>"
+                         "  <td><a href='/set/cache/smart'>"
+                         "      Engage Smart Caching"
+                         "  </a></td>"
+                         "</tr>"
+                         "<tr>"
                          "  <td><a href='/set/nocache'>"
-                         "      Turn Caching Off"
+                         "      Disable Caching"
                          "  </a></td>"
+                         "  <td><a href='/info'>"
+                         "      Cache Diagnostics"
+                         "  </a></td>"
+                         "</tr>"
+                         "<tr>"
+                         "<td style='background-color:black' colspan='2'>"
                          "</tr>"
                          "<tr>"
                          "  <td><a href='/set/nope'>Engage NOPE</a></td>"
