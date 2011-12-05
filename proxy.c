@@ -13,18 +13,19 @@
 #define debug_printf(...) printf(__VA_ARGS__)
 #endif
 
-#define VERBOSE
 #ifndef VERBOSE
 #define verbose_printf(...) {}
 #else
 #define verbose_printf(...) printf(__VA_ARGS__)
 #endif
 
+#define MAX_OBJECT_SIZE 102400 /* 100 KB */
 
 typedef struct {
 	char *header;
 	int rank;
-	void *data;
+    ssize_t size;
+	char *data;
 } object;
 
 int cacheSize;
@@ -45,14 +46,7 @@ void makeGETRequest(char* hostname,
                     int port,
                     rio_t* proxy_client,
                     int server_fd);
-//make a POST request to the server
-//currently experimental
-void makePOSTRequest(char* hostname, 
-                    char* path,
-                    int port,
-                    rio_t* proxy_client,
-                    int server_fd);
-//copy the HTTP request from the server to the client
+//copy the HTTP request from the client to the server
 void copyRequest(int server_fd, rio_t* proxy_client);
 //read back from the server to the client
 void serveToClient(int connfd, rio_t* server_connection, 
@@ -60,11 +54,11 @@ void serveToClient(int connfd, rio_t* server_connection,
 
 
 
-//easter egg functions
-//take over the connection and print the easter egg console
-void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE]);
-//change the host, request, and port based on egg settings
-void handleEasterEgg(char* hostname, char* path, int* port);
+//feature functions
+//take over the connection and print the feature console
+void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE]);
+//change the host, request, and port based on feature settings
+void handleFeatures(char* hostname, char* path, int* port);
 
 /* 
  * Cache Functions
@@ -79,18 +73,19 @@ int query_cache(char *header);
 void grow_cache();
 
 /*****
- * Easter Egg structure
- *  Holds information about the easter egg features
- *  Locked/unlocked by easteregg_muted
+ * Features structure
+ *  Holds information about the features enabled/disabled
+ *  Locked/unlocked by features_mutex
  *****/
-struct ee_features_t
+pthread_mutex_t features_mutex;
+struct features_t
 {
     //nope mode: redirects all requests to a picture that says "NOPE"
     int nope;
     //rickroll mode: redirect all youtube watch requests to rick astley
     int rickroll;
 };
-struct ee_features_t ee_config;
+struct features_t ft_config;;
 
 //@TODO: some way to deal with worst-case thread pileups
 //       I have some ideas
@@ -113,14 +108,14 @@ int main (int argc, char *argv []){
 	port = atoi(argv[1]);
 	listenfd = open_listenfd(port);
 
-    //init easteregg features
+    //init features
     //don't lock because it doesn't matter here (no threads)
-    ee_config.nope = 0;
-    ee_config.rickroll = 0;
+    ft_config.nope = 0;
+    ft_config.rickroll = 0;
 
 
     //initialize mutexes
-    pthread_mutex_init(&easteregg_mutex, NULL);
+    pthread_mutex_init(&features_mutex, NULL);
 
 	while(1) {
 
@@ -170,18 +165,18 @@ void handleConnection(int connfd){
         int port=80;
         parseURL(buffer, hostname, path, &port);
 
-        //if we're trying to access the easter egg console,
-        //  then call the easter egg handler and end the function
+        //if we're trying to access the features console
+        //  then call the feature handler and end the function
         if((strcmp(hostname, "proxy-configurator") == 0))
         {
-            //this is some fun easter-egg-ing that we can do
-            easterEgg(connfd, &proxy_client, path);
+            //manage the features
+            featureConsole(connfd, &proxy_client, path);
             //and done
             return;
         }
 
-        //do silly things based on the status of easter eggs
-        handleEasterEgg(hostname, path, &port);
+        //do silly things based on the status of features
+        handleFeatures(hostname, path, &port);
 
         
         //some debug statements
@@ -247,6 +242,8 @@ void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port)
     hostname[i-11] = '\0';
 }
 
+//read the request from the 
+
 //copy request headers from the client to the server
 //guaranteed to be complete lines
 void copyRequest(int server_fd, rio_t* proxy_client)
@@ -255,8 +252,12 @@ void copyRequest(int server_fd, rio_t* proxy_client)
     while(rio_readlineb(proxy_client, buffer, MAXLINE) && 
             strncmp(buffer, "\r", 1))
     {
-        rio_writen(server_fd, buffer, strlen(buffer));
-        verbose_printf("->\t%s", buffer);
+        if(strncmp(buffer, "Proxy-Connection: ", 18))
+        {
+            rio_writen(server_fd, buffer, strlen(buffer));
+            verbose_printf("->\t%s", buffer);
+        }
+
     }
 }
 
@@ -285,8 +286,16 @@ void makeGETRequest(char* hostname,
 void serveToClient(int connfd, rio_t* server_connection, 
         char* hostname, char* path)
 {
+    object* cacheobj = malloc(sizeof(object));
+    //read into here, then copy the right amount into dynamic memory
+    char tempbuffer[MAX_OBJECT_SIZE];
+    ssize_t bufferpos=0;
+
+
     char buffer[MAXLINE];
-    while(rio_readlineb(server_connection, buffer, MAXLINE) != 0 && 
+
+    ssize_t n = 0; //number of bytes
+    while(((n=rio_readlineb(server_connection, buffer, MAXLINE)) != 0) && 
             buffer[0] != '\r')
     {
         verbose_printf("<-\t%s", buffer);
@@ -295,43 +304,80 @@ void serveToClient(int connfd, rio_t* server_connection,
             printf("Write error\n");
             break;
         }
+        if((bufferpos + n) >= MAX_OBJECT_SIZE)
+        {
+            //null out the object to signify that it's too big
+            free(cacheobj);
+            cacheobj = NULL;
+        }
+        else if(cacheobj)
+        {
+            memcpy(&tempbuffer[bufferpos], buffer, n);
+            bufferpos += n;
+        }
     }
     rio_writen(connfd, "\r\n", strlen("\r\n"));
     
     //@TODO: cache this
 
-    ssize_t n = 0; //number of bytes
     while((n=rio_readnb(server_connection, buffer, MAXLINE)) >0)
     {
-        debug_printf("Read %u bytes\n", n);
         if(rio_writen(connfd, buffer, n) < 0)
         {
             printf("Error writing from %s%s\n", hostname, path);
             //error on write
             return;
         }
-        else
+
+        if((bufferpos + n) >= MAX_OBJECT_SIZE)
         {
-            debug_printf("\t Wrote %u bytes\n", n);
+            //null out the object to signify that it's too big
+            free(cacheobj);
+            cacheobj = NULL;
+        }
+        else if(cacheobj)
+        {
+            memcpy(&tempbuffer[bufferpos], buffer, n);
+            bufferpos += n;
         }
         verbose_printf("<-\t%s", buffer);
         memset(buffer, '\0', MAXLINE*sizeof(char));
+    }
+
+    if(cacheobj)
+    {
+        debug_printf("Built up a cache buffer of length %u\n", bufferpos-1);
+
+        cacheobj->size = bufferpos - 1;
+        cacheobj->data = malloc(bufferpos-1 * sizeof(char));
+        memcpy(cacheobj->data, tempbuffer, bufferpos-1);
+
+        //@TODO: uncomment
+        //add_object(cacheobj);
+
+        //@TODO: delete
+        free(cacheobj->data);
+        free(cacheobj);
+    }
+    else
+    {
+        debug_printf("Object was too big for cache, didn't cache it\n");
     }
 }
 
 
 /*************
- ** Easter Egg functions
+ ** Feature Functions
  ** Not related to the core functionality of the proxy
  *************/
-void handleEasterEgg(char* hostname, char* path, int* port)
+void handleFeatures(char* hostname, char* path, int* port)
 {
-    //@TODO: reader/writer lock on easteregg
-    struct ee_features_t features;
+    //@TODO: reader/writer lock on features
+    struct features_t features;
 
-    pthread_mutex_lock(&easteregg_mutex);
-    memcpy(&features, &ee_config, sizeof(struct ee_features_t));
-    pthread_mutex_unlock(&easteregg_mutex);
+    pthread_mutex_lock(&features_mutex);
+    memcpy(&features, &ft_config, sizeof(struct features_t));
+    pthread_mutex_unlock(&features_mutex);
 
     if(features.nope)
     {
@@ -351,7 +397,7 @@ void handleEasterEgg(char* hostname, char* path, int* port)
         }
     }
 }
-void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
+void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
 {
     //first, get all the headers in the client's request.
     //we can discard most or all of them
@@ -365,9 +411,9 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
     {
         printf("Setting nope mode\n");
         //set nope
-        pthread_mutex_lock(&easteregg_mutex);
-        ee_config.nope = 1;
-        pthread_mutex_unlock(&easteregg_mutex);
+        pthread_mutex_lock(&features_mutex);
+        ft_config.nope = 1;
+        pthread_mutex_unlock(&features_mutex);
 
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
@@ -378,9 +424,9 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
     {
         printf("Unsetting nope mode\n");
         //clear nope
-        pthread_mutex_lock(&easteregg_mutex);
-        ee_config.nope = 0;
-        pthread_mutex_unlock(&easteregg_mutex);
+        pthread_mutex_lock(&features_mutex);
+        ft_config.nope = 0;
+        pthread_mutex_unlock(&features_mutex);
 
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
@@ -391,9 +437,9 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
     {
         printf("Setting rickroll mode\n");
         //set rickroll
-        pthread_mutex_lock(&easteregg_mutex);
-        ee_config.rickroll = 1;
-        pthread_mutex_unlock(&easteregg_mutex);
+        pthread_mutex_lock(&features_mutex);
+        ft_config.rickroll = 1;
+        pthread_mutex_unlock(&features_mutex);
 
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
@@ -404,9 +450,9 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
     {
         printf("Unsetting rickroll mode\n");
         //clear rickroll
-        pthread_mutex_lock(&easteregg_mutex);
-        ee_config.rickroll = 0;
-        pthread_mutex_unlock(&easteregg_mutex);
+        pthread_mutex_lock(&features_mutex);
+        ft_config.rickroll = 0;
+        pthread_mutex_unlock(&features_mutex);
 
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
@@ -430,8 +476,8 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
                           "Content-Type: text/html\r\n\r\n";
         rio_writen(connfd, header, strlen(header));
 
-        char response[] = "<title>Easter Egg Manager</title>"
-                          "<h1>Easter Egg Manager</h1><hr />"
+        char response[] = "<title>Features Manager</title>"
+                          "<h1>Features Manager</h1><hr />"
                           "<b>The settings:</b><br /><br />";
         rio_writen(connfd, response, strlen(response));
 
@@ -440,17 +486,17 @@ void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE])
         char dynamiccontent[MAXLINE];
         memset(dynamiccontent, '\0', MAXLINE*sizeof(char));
         
-        pthread_mutex_lock(&easteregg_mutex);
+        pthread_mutex_lock(&features_mutex);
 
         snprintf(dynamiccontent, MAXLINE, 
                                 "<table style='border-left: 1px black solid' >"
                                 "<tr><td>NOPE Mode:</td><td>%s</td></tr>"
                                 "<tr><td>Rickroll:</td><td>%s</td></tr>"
                                 "</table>",
-                                (ee_config.nope)?"on":"off",
-                                (ee_config.rickroll)?"on":"off");
+                                (ft_config.nope)?"on":"off",
+                                (ft_config.rickroll)?"on":"off");
 
-        pthread_mutex_unlock(&easteregg_mutex);
+        pthread_mutex_unlock(&features_mutex);
         rio_writen(connfd, dynamiccontent, strlen(dynamiccontent));
 
         char options[] = "<style>"
