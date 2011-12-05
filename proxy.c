@@ -65,9 +65,6 @@ void serveToClient(int connfd, rio_t* server_connection,
 void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE]);
 //change the host, request, and port based on egg settings
 void handleEasterEgg(char* hostname, char* path, int* port);
-void fbsniffReadback(int connfd, rio_t* server_connection);
-//this version ignores Accept-Encoding: gzip
-void copyRequestNoGzip(int server_fd, rio_t* proxy_client);
 
 /* 
  * Cache Functions
