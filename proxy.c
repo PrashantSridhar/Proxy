@@ -25,11 +25,12 @@ typedef struct {
 	char *header;
 	int rank;
 	void *data;
+	size_t size;
 } object;
 
 int cacheSize;
 int cacheLength;
-
+int arrayLength;
 //arraylist of object pointers
 object **cache;
 
@@ -75,11 +76,15 @@ void copyRequestNoGzip(int server_fd, rio_t* proxy_client);
 //add the object to the cache
 void add_object(object *o);
 //evict sufficient blocks to add an object of size size to the cache
-void make_space(int size);
+void make_space(size_t size);
 //query the cache for a header of size 
-int query_cache(char *header);
+object* query_cache(char *header);
 //grow the arraylist
 void grow_cache();
+
+
+pthread_rwlock lock;
+
 
 /*****
  * Easter Egg structure
@@ -95,8 +100,52 @@ struct ee_features_t
 };
 struct ee_features_t ee_config;
 
-//@TODO: some way to deal with worst-case thread pileups
-//       I have some ideas
+void add_object(object *o)
+{
+	pthread_rwlock_wrlock(&lock);
+	make_space(o->size);
+	if(arrayLength == cacheLength)
+		grow_cache();
+	o->rank=1;
+	cache[cacheLength++] = o;
+	cacheSize += o->size;
+	pthread_rwlock_unlock(&lock);
+}
+
+void make_space(size_t size){
+	
+	while(cacheSize >= 1<<20 - size)
+	{
+		int i = 0;
+		for(i=0;i<cacheLength
+	}
+}
+
+
+int open_clientfd_r(char *hostname, int port) 
+{
+    int clientfd;
+    struct hostent *hp;
+    struct sockaddr_in serveraddr;
+	//@TODO: Are socket and connect thread safe
+    if ((clientfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+		return -1; /* check errno for cause of error */
+	
+    /* Fill in the server's IP address and port */
+    if ((hp = gethostbyname_r(hostname)) == NULL)
+		return -2; /* check h_errno for cause of error */
+    bzero((char *) &serveraddr, sizeof(serveraddr));
+    serveraddr.sin_family = AF_INET;
+    bcopy((char *)hp->h_addr_list[0], 
+		  (char *)&serveraddr.sin_addr.s_addr, hp->h_length);
+    serveraddr.sin_port = htons(port);
+	
+    /* Establish a connection with the server */
+    if (connect(clientfd, (SA *) &serveraddr, sizeof(serveraddr)) < 0)
+		return -1;
+    return clientfd;
+}
+
 
 
 int main (int argc, char *argv []){
@@ -108,7 +157,9 @@ int main (int argc, char *argv []){
 	struct sockaddr_in clientaddr;
 	cache = malloc(sizeof(object *) * 10);
 	cacheLength = 0;
-	cacheSize = 0; 
+	cacheSize = 0;
+	arrayLength = 10;
+	pthread_rwlock_init(&lock,NULL);
 	if(argc != 2){
 		fprintf(stderr,"Usage %s <port>\n",argv[0]);
 		exit(1);
@@ -194,7 +245,7 @@ void handleConnection(int connfd){
 
 
         //open the connection to the remote server
-        if((server_fd = open_clientfd(hostname, port)) < 0)
+        if((server_fd = open_clientfd_r(hostname, port)) < 0)
         {
             char errorbuf[] = "HTTP 404 NOTFOUND\r\n\r\n404 Not Found\r\n";
             rio_writen(connfd, errorbuf, strlen(errorbuf));
