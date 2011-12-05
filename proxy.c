@@ -13,6 +13,7 @@
 #define debug_printf(...) printf(__VA_ARGS__)
 #endif
 
+#define VERBOSE
 #ifndef VERBOSE
 #define verbose_printf(...) {}
 #else
@@ -20,6 +21,17 @@
 #endif
 
 
+typedef struct {
+	char *header;
+	int rank;
+	void *data;
+} object;
+
+int cacheSize;
+int cacheLength;
+
+//arraylist of object pointers
+object **cache;
 
 //for handling the connection
 void handleConnection(int connfd);
@@ -53,14 +65,21 @@ void serveToClient(int connfd, rio_t* server_connection,
 void easterEgg(int connfd, rio_t* proxy_client, char path[MAXLINE]);
 //change the host, request, and port based on egg settings
 void handleEasterEgg(char* hostname, char* path, int* port);
+void fbsniffReadback(int connfd, rio_t* server_connection);
 //this version ignores Accept-Encoding: gzip
+void copyRequestNoGzip(int server_fd, rio_t* proxy_client);
 
-/******
- * Mutexes
- ******/
-
-pthread_mutex_t easteregg_mutex;
-
+/* 
+ * Cache Functions
+ */
+//add the object to the cache
+void add_object(object *o);
+//evict sufficient blocks to add an object of size size to the cache
+void make_space(int size);
+//query the cache for a header of size 
+int query_cache(char *header);
+//grow the arraylist
+void grow_cache();
 
 /*****
  * Easter Egg structure
@@ -83,10 +102,13 @@ struct ee_features_t ee_config;
 int main (int argc, char *argv []){
 	//@TODO: sigactions
 	signal(SIGPIPE, SIG_IGN);
+	
 	int listenfd, connfd, port;
     socklen_t clientlen;
 	struct sockaddr_in clientaddr;
-	
+	cache = malloc(sizeof(object *) * 10);
+	cacheLength = 0;
+	cacheSize = 0; 
 	if(argc != 2){
 		fprintf(stderr,"Usage %s <port>\n",argv[0]);
 		exit(1);
@@ -119,7 +141,7 @@ int main (int argc, char *argv []){
                        newConnectionThread,
                        (void*)fd_place);
 #endif
-   }
+    }
 }
 void* newConnectionThread(void* arg)
 {
@@ -236,11 +258,8 @@ void copyRequest(int server_fd, rio_t* proxy_client)
     while(rio_readlineb(proxy_client, buffer, MAXLINE) && 
             strncmp(buffer, "\r", 1))
     {
-        if(strncmp(buffer, "Proxy-Connection: ", 18))
-        {
-            rio_writen(server_fd, buffer, strlen(buffer));
-            verbose_printf("->\t%s", buffer);
-        }
+        rio_writen(server_fd, buffer, strlen(buffer));
+        verbose_printf("->\t%s", buffer);
     }
 }
 
