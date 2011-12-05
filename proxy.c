@@ -20,7 +20,29 @@
 #endif
 
 #define MAX_OBJECT_SIZE 102400 /* 100 KB */
+#define MAX_CACHE_SIZE 1048576 /* 1 MB */
 
+//cache implemented as a lined list
+//@TODO: either finish implementing ArrayList cache or remove this comment
+struct cachenode
+{
+    char* header;
+    void* data;
+    int size;
+    struct cachenode* prev;
+    struct cachenode* next;
+};
+
+struct listcache
+{
+    int totalsize;
+    struct cachenode* head;
+    struct cachenode* tail;
+};
+pthread_rwlock_t cachelock;
+
+
+//@TODO: fix this or remove it
 typedef struct {
 	char *header;
 	int rank;
@@ -63,6 +85,7 @@ int handleFeatures(char* hostname, char* path, int* port);
 
 /* 
  * Cache Functions
+ * //@TODO: fix this or remove it
  */
 //add the object to the cache
 void add_object(object *o);
@@ -73,8 +96,20 @@ object* query_cache(char *header);
 //grow the arraylist
 void grow_cache();
 
-
 pthread_rwlock_t lock;
+
+
+//List cache functions
+//add an object to the cache
+void add_cache_object(struct cachenode* obj);
+//find an object in the cache based on header, and update LRU
+//return NULL if not found
+struct cachenode* get_cache_object(char* header);
+//clear the cache
+void clear_cache();
+
+//global cache variable
+struct listcache thecache;
 
 
 /*****
@@ -131,6 +166,9 @@ int open_clientfd_r(char *hostname, int port)
 		return -1; /* check errno for cause of error */
 	
     /* Fill in the server's IP address and port */
+
+    //@TODO: use gethostbyname_r
+
     if ((hp = gethostbyname(hostname)) == NULL)
 		return -2; /* check h_errno for cause of error */
     bzero((char *) &serveraddr, sizeof(serveraddr));
@@ -175,6 +213,12 @@ int main (int argc, char *argv []){
 
     //initialize mutexes
     pthread_mutex_init(&features_mutex, NULL);
+    pthread_rwlock_init(&cachelock, NULL);
+
+    //initialize cache
+    thecache.totalsize = 0;
+    thecache.head = NULL;
+    thecache.tail = NULL;
 
 	while(1) {
 
@@ -238,7 +282,34 @@ void handleConnection(int connfd){
         //get the cache status: 1 = dumb, 2 = smart, 0 = off
         int cachestatus = handleFeatures(hostname, path, &port);
 
-        
+       
+        //search the cache
+        if(cachestatus)
+        {
+            char header[strlen(hostname)+strlen(path)+1];
+            sprintf(header, "%s%s", hostname, path);
+            struct cachenode* obj = get_cache_object(header);
+            if(obj)
+            {
+                debug_printf("Serving object %s from the cache! (Size %u)\n",
+                        header, (unsigned)obj->size);
+
+                //@TODO: error check?
+                rio_writen(connfd, obj->data, obj->size);
+                free(obj->data);
+                free(obj->header);
+                free(obj);
+
+                close(connfd);
+                return;
+            }
+            else
+            {
+                debug_printf("Could not find %s in the cache\n", header);
+            }
+        }
+
+
         //some debug statements
         debug_printf("Trying to contact hostname %s on port %d\n",
                       hostname, port);
@@ -351,33 +422,55 @@ void serveToClient(int connfd, rio_t* server_connection,
     int shouldcache = 0; //smart caching: do the headers say we should cache?
 
     //we'll build up this cache object
-    object* cacheobj = malloc(sizeof(object));
+    //@TODO: delete or fix arraylist cache
+    //object* cacheobj = malloc(sizeof(object));
+    struct cachenode* cacheobj = malloc(sizeof(struct cachenode));
+
+    //set up the cache object's header
+    cacheobj->header = calloc(strlen(hostname)+strlen(path)+1, sizeof(char));
+    sprintf(cacheobj->header, "%s%s", hostname, path);
+
     //read into here, then copy the right amount into dynamic memory
     char tempbuffer[MAX_OBJECT_SIZE];
-    ssize_t bufferpos=0;
+    int bufferpos=0;
 
     char buffer[MAXLINE];
 
-    ssize_t n = 0; //number of bytes
+    int n = 0; //number of bytes
     while(((n=rio_readlineb(server_connection, buffer, MAXLINE)) != 0) && 
             buffer[0] != '\r')
     {
         verbose_printf("<-\t%s", buffer);
         if(rio_writen(connfd, buffer, strlen(buffer)) < 0)
         {
-            printf("Write error\n");
+            printf("Write error from %s%s\n", hostname, path);
+            free(cacheobj->header);
+            free(cacheobj);
+            cacheobj = NULL;
             break;
         }
-        if((bufferpos + n) >= MAX_OBJECT_SIZE)
+        if(cacheobj && (bufferpos + strlen(buffer)) >= MAX_OBJECT_SIZE)
         {
             //null out the object to signify that it's too big
+
+            free(cacheobj->header);
             free(cacheobj);
             cacheobj = NULL;
         }
-        else if(cacheobj)
+        if(cacheobj)
         {
-            memcpy(&tempbuffer[bufferpos], buffer, n);
-            bufferpos += n;
+            //memcpy(tempbuffer + bufferpos, buffer, n);
+            //bufferpos += n;
+            
+            n=sprintf(&tempbuffer[bufferpos], "%s", buffer);
+            if(n > 0)
+            {
+                bufferpos+=n;
+            }
+            else
+            {
+                printf("\n\nError!\n\n");
+            }
         }
 
         //see if the header says anything about caching
@@ -396,6 +489,22 @@ void serveToClient(int connfd, rio_t* server_connection,
         }
     }
     rio_writen(connfd, "\r\n", strlen("\r\n"));
+    
+    if(cacheobj && (bufferpos+2) >= MAX_OBJECT_SIZE)
+    {
+        //null out the object to signify that it's too big
+
+        free(cacheobj->header);
+        free(cacheobj);
+        cacheobj = NULL;
+    }
+
+    if(cacheobj)
+    {
+        //sscanf(&tempbuffer[bufferpos], "\r\n");
+        //bufferpos+=2;
+        bufferpos+=sprintf(&tempbuffer[bufferpos], "\r\n" );
+    }
 
     //if we're absolutely not caching, then set shouldcache to false
     if(shouldcache == -1)
@@ -414,49 +523,55 @@ void serveToClient(int connfd, rio_t* server_connection,
             return;
         }
 
-        if((bufferpos + n) >= MAX_OBJECT_SIZE)
+        if(cacheobj && (bufferpos + n) >= MAX_OBJECT_SIZE)
         {
             //null out the object to signify that it's too big
+            free(cacheobj->header);
             free(cacheobj);
             cacheobj = NULL;
         }
-        else if(cacheobj)
+        if(cacheobj)
         {
-            memcpy(&tempbuffer[bufferpos], buffer, n);
+            memcpy(tempbuffer + bufferpos, buffer, n);
             bufferpos += n;
         }
         verbose_printf("<-\t%s", buffer);
         memset(buffer, '\0', MAXLINE*sizeof(char));
+        printf("\t Bufferpos is %d\n", bufferpos);
     }
 
     if(cacheobj)
     {
-        debug_printf("Built up a cache buffer of length %u\n", bufferpos-1);
-
-        cacheobj->size = bufferpos - 1;
-        cacheobj->data = malloc(bufferpos-1 * sizeof(char));
-        memcpy(cacheobj->data, tempbuffer, bufferpos-1);
+        cacheobj->size = bufferpos;
+        printf("Bufferpos %d stored as size %u\n", bufferpos, cacheobj->size);
+        cacheobj->data = malloc(bufferpos * sizeof(char));
+        memcpy(cacheobj->data, tempbuffer, bufferpos);
 
         if(cachestatus == 1) //1 = cache, 2 = smart cache, 0 = don't cache
         {
-            //@TODO: uncomment
+            //@TODO: fix or delete arraylist cache
             //add_object(cacheobj);
+
+            debug_printf("Added object '%s' to the cache\n",
+                            cacheobj->header);
+            add_cache_object(cacheobj);
         }
         else if(cachestatus == 2)
         {
             if(shouldcache)
             {
-                //@TODO: uncomment
+                //@TODO: fix or delete arraylist cache
                 //add_object(cacheobj)
 
-                //@TODO: delete this
-                free(cacheobj->data);
-                free(cacheobj);
+                add_cache_object(cacheobj);
+                debug_printf("Added object '%s' to the cache\n",
+                                cacheobj->header);
             }
             else
             {
                 //smart caching says no
                 debug_printf("Smart cache: skipping the cache\n");
+                free(cacheobj->header);
                 free(cacheobj->data);
                 free(cacheobj);
             }
@@ -464,6 +579,7 @@ void serveToClient(int connfd, rio_t* server_connection,
         else
         {
             debug_printf("Cache disabled: skipping the cache\n");
+            free(cacheobj->header);
             free(cacheobj->data);
             free(cacheobj);
         }
@@ -474,6 +590,128 @@ void serveToClient(int connfd, rio_t* server_connection,
     }
 }
 
+/***********
+ ** List Cache functions
+ ***********/
+
+//add an object to the cache
+void add_cache_object(struct cachenode* obj)
+{
+    if(obj->size > MAX_OBJECT_SIZE)
+        return; //discard it
+    pthread_rwlock_wrlock(&cachelock);
+    int availablesize = 1024*1024 - (int)thecache.totalsize;
+    availablesize -= (int)obj->size;
+
+    while(availablesize < 0)
+    {
+        //while there's not enough space, knock out oldest entry
+        struct cachenode* end = thecache.tail;
+        if(end == NULL)
+        {
+            break;
+        }
+        struct cachenode* newend = end->prev;
+        thecache.totalsize = thecache.totalsize - end->size;
+        printf("Freed %d bytes from the cache\n", end->size);
+
+        free(end->header);
+        free(end->data);
+        free(end);
+        if(newend)
+            newend->next = NULL;
+        thecache.tail = newend;
+        availablesize = 1024*1024 - (int)thecache.totalsize - obj->size;
+    }
+    printf("\n\nAvailable size: %d\n\n", availablesize);
+
+    //@FIXME: this is like an assert
+    if(availablesize < 0){exit(1);}
+
+    //now add the new entry to the front of the list
+    obj->prev = NULL;
+    obj->next = thecache.head;
+    if(obj->next)
+        obj->next->prev = obj;
+    thecache.head = obj;
+    if(thecache.tail == NULL)
+        thecache.tail = obj;
+    thecache.totalsize += obj->size;
+
+    debug_printf("\tNew total cache size is %u\n", thecache.totalsize);
+
+    pthread_rwlock_unlock(&cachelock);
+}
+
+//find an object in the cache based on header, and update LRU
+//return NULL if not found
+struct cachenode* get_cache_object(char* header)
+{
+    //@TODO: actually use readlocking
+    //right now, we just use write locking for LRU
+    pthread_rwlock_wrlock(&cachelock);
+    struct cachenode* obj = thecache.head;
+    while(obj)
+    {
+        if(strcmp(obj->header, header) == 0)
+        {
+            //found cache object
+            //move it to the head of the list
+            struct cachenode* prev = obj->prev;
+            struct cachenode* next = obj->next;
+            if(prev)
+                prev->next = next;
+            if(next)
+                next->prev = prev;
+            obj->prev = NULL;
+            obj->next = thecache.head;
+            if(obj->next == obj)
+            {
+                obj->next = NULL;
+            }
+            if(obj->next)
+                obj->next->prev = obj;
+            thecache.head = obj;
+
+            //now we allocate a new cache object, copy the entry into it, and
+            //return that instead. We do this in case the cache entry gets freed
+            //after return but before usage
+            //
+            //it is the caller's responsibility to free it
+            struct cachenode* ret = malloc(sizeof(struct cachenode));
+            ret->data = malloc(obj->size);
+            memcpy(ret->data, obj->data, obj->size);
+            ret->size = obj->size;
+            ret->header = NULL; //we don't care about the header, and free(NULL)
+                                //                                 does nothing.
+            pthread_rwlock_unlock(&cachelock);
+            return ret;
+        }
+        obj = obj->next;
+    }
+    pthread_rwlock_unlock(&cachelock);
+    return NULL;
+}
+
+
+//clear the cache
+void clear_cache()
+{
+    pthread_rwlock_wrlock(&cachelock);
+    struct cachenode* n = thecache.head;
+    while(n)
+    {
+        struct cachenode* next = n->next;
+        free(n->header);
+        free(n->data);
+        free(n);
+        n = next;
+    }
+    thecache.head = NULL;
+    thecache.tail = NULL;
+    thecache.totalsize = 0;
+    pthread_rwlock_unlock(&cachelock);
+}
 
 /*************
  ** Feature Functions
@@ -604,11 +842,22 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         ft_config.cache = 0;
         pthread_mutex_unlock(&features_mutex);
 
-        //@TODO: clear the cache here
+        clear_cache();
 
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
+        rio_writen(connfd, header, strlen(header));
+    }
+    else if(strncmp(path, "/clearcache", 11)==0)
+    {
+        printf("Clearing cache\n");
+        //clear the cache
+        clear_cache();
+
+        //and return to the status page
+        char header[] = "HTTP/1.0 302 Found\r\n"
+                          "Location: /info\r\n\r\n";
         rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/info", 5)==0)
@@ -618,8 +867,46 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         rio_writen(connfd, header, strlen(header));
 
         char response[] = "<title>Proxy Diagnostic Page</title>"
-                          "<h1>Cache Diagnostics</h1><hr />";
+                          "<h1>Cache Diagnostics</h1><hr />"
+                          "<a href='/clearcache'>Clear the Cache</a>"
+                          "<br />"
+                          "<a href='/'>Back</a><br />";
         rio_writen(connfd, response, strlen(response));
+        
+        char data[MAXLINE];
+        int n = 0;
+        
+        //let's read the cache
+        pthread_rwlock_rdlock(&cachelock);
+        double percentfull = ((double)thecache.totalsize*100.0);
+        percentfull /= (double)MAX_CACHE_SIZE;
+
+        n = sprintf(data, "Total cache size is <b>%u bytes (%.2f%%)</b>"
+                      "<br /><br />"
+                      "<style>"
+                      "table{table-layout: fixed;}"
+                      "td{width: 45%;}"
+                      "</style>"
+                      "Here's what's in the cache (in order):<br />"
+                      "<table><tr><th>Size</th>"
+                      "<th>Header</th></tr>",
+                      thecache.totalsize, percentfull);
+        rio_writen(connfd, data, n);
+
+        struct cachenode* node = thecache.head;
+        while(node)
+        {
+            n=sprintf(data, "<tr>"
+                            "<td>%u bytes</td><td>%s</td>"
+                            "</tr>", 
+                                node->size, node->header);
+            rio_writen(connfd, data, n);
+            node = node->next;
+        }
+        n=sprintf(data, "</table>");
+        rio_writen(connfd, data, n);
+
+        pthread_rwlock_unlock(&cachelock);
     }
     //other conditions here
     else
