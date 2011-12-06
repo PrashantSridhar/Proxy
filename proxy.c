@@ -284,6 +284,7 @@ void* newConnectionThread(void* arg)
 	int connfd = *(int*)arg;
     free(arg);
     handleConnection(connfd);
+    return NULL;
 }
 
 void handleConnection(int connfd){
@@ -317,7 +318,6 @@ void handleConnection(int connfd){
             //and done
             return;
         }
-/*
         //manipulate the request based on the features
         //get the cache status: 1 = dumb, 2 = smart, 0 = off
         int cachestatus = handleFeatures(hostname, path, &port);
@@ -328,7 +328,8 @@ void handleConnection(int connfd){
         {
             char header[strlen(hostname)+strlen(path)+1];
             sprintf(header, "%s%s", hostname, path);
-            struct cachenode* obj = get_cache_object(header);
+            //struct cachenode* obj = get_cache_object(header);
+            object* obj = query_cache(header);
             if(obj)
             {
                 debug_printf("Serving object %s from the cache! (Size %u)\n",
@@ -349,7 +350,6 @@ void handleConnection(int connfd){
             }
         }
 
-*/
         //some debug statements
        // debug_printf("Trying to contact hostname %s on port %d\n",
         //              hostname, port);
@@ -453,6 +453,9 @@ void makeGETRequest(char* hostname,
     //
     //finish the request
     rio_writen(server_fd, "\r\n", strlen("\r\n"));
+
+    //@TODO: either use these params or remove them from the sig
+    if(hostname == hostname || port == port){}
 }
 
 void serveToClient(int connfd, rio_t* server_connection, 
@@ -566,12 +569,12 @@ void serveToClient(int connfd, rio_t* server_connection,
 	memcpy(data, tempbuffer, bufferpos);
 	cacheobj->data = data;
 	cacheobj->size = bufferpos;
-	verbose_printf("size = %d\n",cacheobj->size);
+	verbose_printf("size = %d\n",(int)(cacheobj->size));
 	
-    /*if(cacheobj)
+    if(cacheobj)
     {
         cacheobj->size = bufferpos;
-        printf("Bufferpos %d stored as size %u\n", bufferpos, cacheobj->size);
+        printf("Bufferpos %d stored as size %d\n", bufferpos, (int)cacheobj->size);
         cacheobj->data = malloc(bufferpos * sizeof(char));
         memcpy(cacheobj->data, tempbuffer, bufferpos);
 
@@ -582,7 +585,8 @@ void serveToClient(int connfd, rio_t* server_connection,
 
             debug_printf("Added object '%s' to the cache\n",
                             cacheobj->header);
-            add_cache_object(cacheobj);
+            //add_cache_object(cacheobj);
+            add_object(cacheobj);
         }
         else if(cachestatus == 2)
         {
@@ -591,7 +595,8 @@ void serveToClient(int connfd, rio_t* server_connection,
                 //@TODO: fix or delete arraylist cache
                 //add_object(cacheobj)
 
-                add_cache_object(cacheobj);
+                //add_cache_object(cacheobj);
+                add_object(cacheobj);
                 debug_printf("Added object '%s' to the cache\n",
                                 cacheobj->header);
             }
@@ -615,7 +620,7 @@ void serveToClient(int connfd, rio_t* server_connection,
     else
     {
         debug_printf("Object was too big for cache, didn't cache it\n");
-    }*/
+    }
 }
 
 /***********
@@ -759,7 +764,8 @@ int handleFeatures(char* hostname, char* path, int* port)
     {
         printf("Lol, nope.\n");
         sprintf(hostname, "farm6.staticflickr.com");
-        sprintf(path, "/5258/5582667252_b3b46db1ec_b.jpg");
+        size_t n = sprintf(path, "/5258/5582667252_b3b46db1ec_b.jpg");
+        path[n]='\0'; //null-terminate ALL THE THINGS
         *port=80;
     }
     if(features.rickroll)
@@ -769,7 +775,8 @@ int handleFeatures(char* hostname, char* path, int* port)
             || (strcmp(hostname, "www.youtube.com") == 0))
            && (strncmp(path, "/watch", 6) == 0))
         {
-            sprintf(path, "/watch?v=oHg5SJYRHA0\0");
+            size_t n = sprintf(path, "/watch?v=oHg5SJYRHA0");
+            path[n]='\0'; //null-terminate ALL THE THINGS
         }
     }
     return features.cache;
@@ -913,7 +920,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                       "<br /><br />"
                       "<style>"
                       "table{table-layout: fixed;}"
-                      "td{width: 45%;}"
+                      "td{width: 45%%;}"
                       "</style>"
                       "Here's what's in the cache (in order):<br />"
                       "<table><tr><th>Size</th>"
