@@ -114,8 +114,7 @@ int open_clientfd_r(char *hostname, int port)
     struct hostent *hp;
 	struct hostent ret;
     struct sockaddr_in serveraddr;
-	//@TODO: Are socket and connect thread safe
-    if ((clientfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+	if ((clientfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 		return -1; /* check errno for cause of error */
 	
     /* Fill in the server's IP address and port */
@@ -136,6 +135,7 @@ int open_clientfd_r(char *hostname, int port)
 		return -1;
     return clientfd;
 }
+
 
 
 
@@ -213,13 +213,13 @@ void handleConnection(int connfd){
     char buffer[MAXLINE];
     memset(buffer, '\0', MAXLINE*sizeof(char));
     rio_t proxy_client;
-    rio_readinitb(&proxy_client, connfd);
+    Rio_readinitb(&proxy_client, connfd);
 
     int server_fd;
     rio_t server_connection;
 
     //get the first line of the request into the buffer
-    rio_readlineb(&proxy_client, buffer, MAXLINE);
+    Rio_readlineb(&proxy_client, buffer, MAXLINE);
     if(strncmp(buffer, "GET http:", 9) == 0)
     {
         //we've got a get request
@@ -258,11 +258,8 @@ void handleConnection(int connfd){
                 debug_printf("Serving object %s from the cache! (Size %u)\n",
                         path, (unsigned)obj->size);
 
-                //@TODO: error check?
-                if(rio_writen(connfd, obj->data, obj->size) != obj->size)
-                {
-                    printf("PANIC! Didn't successfully write the object\n");
-                }
+                
+                Rio_writen(connfd, obj->data, obj->size);
                 freeNode(obj);
 
                 close(connfd);
@@ -281,16 +278,14 @@ void handleConnection(int connfd){
 
 
         //open the connection to the remote server
-        //@TODO: change this back
-        //if((server_fd = open_clientfd_r(hostname, port)) < 0)
-        if((server_fd = open_clientfd_r(hostname, port)) < 0)
+		if((server_fd = open_clientfd_r(hostname, port)) < 0)
         {
             char errorbuf[] = "HTTP 404 NOTFOUND\r\n\r\n404 Not Found\r\n";
-            rio_writen(connfd, errorbuf, strlen(errorbuf));
+            Rio_writen(connfd, errorbuf, strlen(errorbuf));
             close(connfd);
             return;
         }
-        rio_readinitb(&server_connection, server_fd);
+        Rio_readinitb(&server_connection, server_fd);
 
         //now, make the GET request to the server
         makeGETRequest(path,requestheader, server_fd);
@@ -308,7 +303,7 @@ void handleConnection(int connfd){
     {
         //if we don't have a GET request with http, throw an error
         char errorbuf[] = "HTTP 500 ERROR\r\n\r\n";
-        rio_writen(connfd, errorbuf, strlen(errorbuf));
+        Rio_writen(connfd, errorbuf, strlen(errorbuf));
     }
     close(connfd);
 }
@@ -356,7 +351,7 @@ char* copyRequest(rio_t* proxy_client)
     int bufferpos = 0;
     ssize_t n;
     char buffer[MAXLINE];
-    while((n=rio_readlineb(proxy_client, buffer, MAXLINE)) && 
+    while((n=Rio_readlineb(proxy_client, buffer, MAXLINE)) && 
             strncmp(buffer, "\r", 1))
     {
         //don't send proxy-connection or cache-control headers
@@ -380,22 +375,19 @@ char* copyRequest(rio_t* proxy_client)
 
 void writeRequest(int server_fd, char* buffer)
 {
-    if(rio_writen(server_fd, buffer, strlen(buffer)) <= 0)
-    {
-        //@TODO error handling
-    }
-    rio_writen(server_fd, "\r\n", 2);
+    Rio_writen(server_fd, buffer, strlen(buffer));
+   	Rio_writen(server_fd, "\r\n", 2);
 }
 void makeGETRequest(char* path,
                     char* buffer,
                     int server_fd)
 {
     //make the GET request
-    rio_writen(server_fd, "GET ", strlen("GET "));
-    rio_writen(server_fd, path, strlen(path));
-    rio_writen(server_fd, " ", strlen(" "));
-    rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
-    rio_writen(server_fd, "\r\n", strlen("\r\n"));
+    Rio_writen(server_fd, "GET ", strlen("GET "));
+    Rio_writen(server_fd, path, strlen(path));
+    Rio_writen(server_fd, " ", strlen(" "));
+    Rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
+    Rio_writen(server_fd, "\r\n", strlen("\r\n"));
 
     verbose_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
 
@@ -423,7 +415,7 @@ void serveToClient(int connfd, rio_t* server_connection,
     memset(buffer, '\0', MAXLINE);
 
     int n = 0; //number of bytes
-    while(((n=rio_readlineb(server_connection, buffer, MAXLINE)) != 0) && 
+    while(((n=Rio_readlineb(server_connection, buffer, MAXLINE)) != 0) && 
             buffer[0] != '\r')
     {
         //verbose_printf("<-\t%s", buffer);
@@ -463,7 +455,7 @@ void serveToClient(int connfd, rio_t* server_connection,
             shouldcache = -1;
         }
     }
-    rio_writen(connfd, "\r\n", strlen("\r\n"));
+    Rio_writen(connfd, "\r\n", strlen("\r\n"));
     
     if((bufferpos+2) >= MAX_OBJECT_SIZE)
     {
@@ -481,11 +473,12 @@ void serveToClient(int connfd, rio_t* server_connection,
         shouldcache = 0;
     }
     
-    while((n=rio_readnb(server_connection, buffer, MAXLINE)) >0)
+    while((n=Rio_readnb(server_connection, buffer, MAXLINE)) >0)
     {
         if(rio_writen(connfd, buffer, n) < 0)
         {
-            printf("Error writing from %s%s\n", hostname, path);
+            //@TODO: fails often. dunno why
+			printf("Error writing from %s%s\n", hostname, path);
             //error on write
             freeNode(cacheobj);
 			return;
@@ -523,7 +516,7 @@ void serveToClient(int connfd, rio_t* server_connection,
 
         if(cachestatus == 1) //1 = cache, 2 = smart cache, 0 = don't cache
         {
-            //@TODO: fix or delete arraylist cache
+            
 
             debug_printf("Added object '%s%s' to the cache\n",
                             hostname, path);
@@ -533,8 +526,7 @@ void serveToClient(int connfd, rio_t* server_connection,
         {
             if(shouldcache)
             {
-                //@TODO: fix or delete arraylist cache
-
+                
                 debug_printf("Added object '%s' to the cache\n",
                                 cacheobj->header);
                 add_cache_object(cacheobj);
@@ -739,7 +731,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
     //first, get all the headers in the client's request.
     //we can discard most or all of them
     char buffer[MAXLINE];
-    while(rio_readlineb(proxy_client, buffer, MAXLINE) && 
+    while(Rio_readlineb(proxy_client, buffer, MAXLINE) && 
             strncmp(buffer, "\r", 1)){};
 
 
@@ -755,7 +747,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
+        Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/unnope", 11)==0)
     {
@@ -768,7 +760,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
+        Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/rickroll", 13)==0)
     {
@@ -781,7 +773,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
+        Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/norickroll", 15)==0)
     {
@@ -794,7 +786,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
+        Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/cache/dumb", 15)==0)
     {
@@ -807,7 +799,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
+        Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/cache/smart", 16)==0)
     {
@@ -820,7 +812,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
+        Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/nocache", 12)==0)
     {
@@ -835,7 +827,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
+        Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/clearcache", 11)==0)
     {
@@ -846,20 +838,20 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /info\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
+        Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/info", 5)==0)
     {
         char header[] = "HTTP/1.0 200 OK\r\n"
                           "Content-Type: text/html\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
+        Rio_writen(connfd, header, strlen(header));
 
         char response[] = "<title>Proxy Diagnostic Page</title>"
                           "<h1>Cache Diagnostics</h1><hr />"
                           "<a href='/clearcache'>Clear the Cache</a>"
                           "<br />"
                           "<a href='/'>Back</a><br />";
-        rio_writen(connfd, response, strlen(response));
+        Rio_writen(connfd, response, strlen(response));
         
         char data[MAXLINE];
         int n = 0;
@@ -885,7 +877,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                       "<table><tr><th>Size</th>"
                       "<th>Object (headers hidden)</th></tr>",
                       2*(int)percentfull, thecache.totalsize, percentfull);
-        rio_writen(connfd, data, n);
+        Rio_writen(connfd, data, n);
 
         struct cachenode* node = thecache.head;
         while(node)
@@ -894,11 +886,11 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                             "<td>%u bytes</td><td>%s</td>"
                             "</tr>", 
                                 node->size, node->objname);
-            rio_writen(connfd, data, n);
+            Rio_writen(connfd, data, n);
             node = node->next;
         }
         n=sprintf(data, "</table>");
-        rio_writen(connfd, data, n);
+        Rio_writen(connfd, data, n);
 
         pthread_rwlock_unlock(&cachelock);
     }
@@ -907,12 +899,12 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
     {
         char header[] = "HTTP/1.0 200 OK\r\n"
                           "Content-Type: text/html\r\n\r\n";
-        rio_writen(connfd, header, strlen(header));
+        Rio_writen(connfd, header, strlen(header));
 
         char response[] = "<title>Features Manager</title>"
                           "<h1>Features Manager</h1><hr />"
                           "<b>The settings:</b><br /><br />";
-        rio_writen(connfd, response, strlen(response));
+        Rio_writen(connfd, response, strlen(response));
 
 
 
@@ -933,7 +925,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                                 (ft_config.rickroll)?"on":"off");
 
         pthread_mutex_unlock(&features_mutex);
-        rio_writen(connfd, dynamiccontent, strlen(dynamiccontent));
+        Rio_writen(connfd, dynamiccontent, strlen(dynamiccontent));
 
         char options[] = "<style>"
                          "body{"
@@ -987,11 +979,11 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                          "  </a></td>"
                          "</tr>"
                          "</table>";
-        rio_writen(connfd, options, strlen(options));
+        Rio_writen(connfd, options, strlen(options));
 
         char response2[] = "<br /><hr /><i>This proxy server written by Jeff Cooper and "
                    "Prashant Sridhar, and powered by Caffeine.</i>";
-        rio_writen(connfd, response2, strlen(response2));
+        Rio_writen(connfd, response2, strlen(response2));
     }
 
     close(connfd);
