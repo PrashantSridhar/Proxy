@@ -1,5 +1,4 @@
 #define _GNU_SOURCE
-#define SEQUENTIAL
 
 #include <stdio.h>
 #include <stdlib.h>
