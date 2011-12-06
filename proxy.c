@@ -176,22 +176,27 @@ void make_space(size_t size)
 	}
 }
 
+int chrcmpn(char *s1,char *s2,int n)
+{
+	int i;
+	int sum=0;
+	for(i=0;i<n;i++)
+		sum+= s1[i] - s2[i];
+	return sum;
+}
+
 object *query_cache(char *header)
 {
 	int i=0;
 	object *result = NULL;
-	pthread_rwlock_rdlock(&lock);
-	for(i=0;i<arrayLength;i++){
-		if(cache[i] && !strcmp(cache[i]->header,header)){
-			result = cache[i];
-			pthread_rwlock_unlock(&lock);
-			pthread_rwlock_wrlock(&lock);
-			cache[i]->stamp = time(NULL);
-			pthread_rwlock_unlock(&lock);
-			return result;
+	for(i=0;i<arrayLength;i++)
+	{
+		if(cache[i] && 
+		   !strncmp(cache[i]->header,header,strlen(cache[i]->header)))
+		{
+			return cache[i];
 		}
 	}
-	pthread_rwlock_unlock(&lock);
 	return result;
 }
 
@@ -476,7 +481,7 @@ void serveToClient(int connfd, rio_t* server_connection,
     while(((n=rio_readlineb(server_connection, buffer, MAXLINE)) != 0) && 
             buffer[0] != '\r')
     {
-        verbose_printf("<-\t%s", buffer);
+        //verbose_printf("<-\t%s", buffer);
         if(rio_writen(connfd, buffer, strlen(buffer)) < 0)
         {
             printf("Write error from %s%s\n", hostname, path);
@@ -491,7 +496,7 @@ void serveToClient(int connfd, rio_t* server_connection,
 		n=sprintf(tempbuffer+bufferpos, "%s", buffer);
 		if(n > 0)
 		{
-			bufferpos+=n;
+			bufferpos+=n+1;
 		}
 		else
 		{
@@ -527,9 +532,23 @@ void serveToClient(int connfd, rio_t* server_connection,
 	bufferpos+=sprintf(&tempbuffer[bufferpos], "\r\n" );
 	char *header = calloc(sizeof(char),bufferpos);
 	memcpy(header, tempbuffer, bufferpos);
+	
+	pthread_rwlock_rdlock(&lock);
+	object *hit=query_cache(header);
+	if(hit)
+	{
+		rio_writen(connfd,hit->data,hit->size);
+		pthread_rwlock_unlock(&lock);
+		pthread_rwlock_wrlock(&lock);
+		hit->stamp = time(NULL);
+		pthread_rwlock_unlock(&lock);
+		verbose_printf("cache hit size %d\n",(int)hit->size);
+		return;
+	}
+	pthread_rwlock_unlock(&lock);
 	cacheobj->header = header;
 	debug_printf("header %s",header);	
-
+	
     //if we're absolutely not caching, then set shouldcache to false
     if(shouldcache == -1)
     {
@@ -545,22 +564,13 @@ void serveToClient(int connfd, rio_t* server_connection,
         {
             printf("Error writing from %s%s\n", hostname, path);
             //error on write
-            return;
-        }
-
-        if(cacheobj && (bufferpos + n) >= MAX_OBJECT_SIZE)
-        {
-            //null out the object to signify that it's too big
             free(cacheobj->header);
-            free(cacheobj);
-            cacheobj = NULL;
+			free(cacheobj);
+			return;
         }
-        if(cacheobj)
-        {
-            n=sprintf(tempbuffer+bufferpos, "%s", buffer);
-            bufferpos += n;
-        }
-        verbose_printf("<-\t%s", buffer);
+		n=sprintf(tempbuffer+bufferpos, "%s", buffer);
+		bufferpos += n+1;
+        //verbose_printf("<-\t%s", buffer);
         memset(buffer, '\0', MAXLINE*sizeof(char));
         //printf("\t Bufferpos is %d\n", bufferpos);
     }
@@ -570,6 +580,12 @@ void serveToClient(int connfd, rio_t* server_connection,
 	cacheobj->data = data;
 	cacheobj->size = bufferpos;
 	verbose_printf("size = %d\n",(int)(cacheobj->size));
+	if(cacheobj->size > MAX_OBJECT_SIZE)
+	{
+		free(cacheobj->header);
+		free(cacheobj->data);
+		free(cacheobj);
+	}
 	
     if(cacheobj)
     {
@@ -585,7 +601,7 @@ void serveToClient(int connfd, rio_t* server_connection,
 
             debug_printf("Added object '%s' to the cache\n",
                             cacheobj->header);
-            //add_cache_object(cacheobj);
+            add_object(cacheobj);
             add_object(cacheobj);
         }
         else if(cachestatus == 2)
@@ -595,7 +611,7 @@ void serveToClient(int connfd, rio_t* server_connection,
                 //@TODO: fix or delete arraylist cache
                 //add_object(cacheobj)
 
-                //add_cache_object(cacheobj);
+                add_object(cacheobj);
                 add_object(cacheobj);
                 debug_printf("Added object '%s' to the cache\n",
                                 cacheobj->header);
