@@ -9,13 +9,13 @@
 
 #include "csapp.h"
 
-//#define DEBUG
+#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
 #define debug_printf(...) printf(__VA_ARGS__)
 #endif
-#define VERBOSE
+
 #ifndef VERBOSE
 #define verbose_printf(...) {}
 #else
@@ -70,13 +70,15 @@ void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port);
 void makeGETRequest(char* hostname, 
                     char* path,
                     int port,
-                    rio_t* proxy_client,
+                    char* buffer,
                     int server_fd);
-//copy the HTTP request from the client to the server
-void copyRequest(int server_fd, rio_t* proxy_client);
+//copy the HTTP request from the client to a buffer
+char* copyRequest(rio_t* proxy_client);
+//write a buffer to the server
+void writeRequest(int server_fd, char* buffer);
 //read back from the server to the client
 void serveToClient(int connfd, rio_t* server_connection, 
-        char* hostname, char* path, int cachestatus);
+        char* hostname, char* path, int cachestatus, char* cachereq);
 
 
 
@@ -303,7 +305,7 @@ void handleConnection(int connfd){
 
     //get the first line of the request into the buffer
     rio_readlineb(&proxy_client, buffer, MAXLINE);
-    if(strncmp(buffer, "GET ", 4) == 0)
+    if(strncmp(buffer, "GET http:", 9) == 0)
     {
         //we've got a get request
         //debug_printf("Executing a GET request\n");
@@ -327,21 +329,24 @@ void handleConnection(int connfd){
         //get the cache status: 1 = dumb, 2 = smart, 0 = off
         int cachestatus = handleFeatures(hostname, path, &port);
 
+        char* requestheader = copyRequest(&proxy_client);
+
        
         //search the cache
         if(cachestatus)
         {
-            char header[strlen(hostname)+strlen(path)+1];
-            sprintf(header, "%s%s", hostname, path);
-            //struct cachenode* obj = get_cache_object(header);
-            object* obj = query_cache(header);
+            struct cachenode* obj = get_cache_object(requestheader);
+            //object* obj = query_cache(header);
             if(obj)
             {
                 debug_printf("Serving object %s from the cache! (Size %u)\n",
-                        header, (unsigned)obj->size);
+                        path, (unsigned)obj->size);
 
                 //@TODO: error check?
-                rio_writen(connfd, obj->data, obj->size);
+                if(rio_writen(connfd, obj->data, obj->size) != obj->size)
+                {
+                    printf("PANIC! Didn't successfully write the object\n");
+                }
                 free(obj->data);
                 free(obj->header);
                 free(obj);
@@ -351,7 +356,7 @@ void handleConnection(int connfd){
             }
             else
             {
-                debug_printf("Could not find %s in the cache\n", header);
+                debug_printf("Could not find %s in the cache\n", path);
             }
         }
 
@@ -373,11 +378,12 @@ void handleConnection(int connfd){
 
         //now, make the GET request to the server
         makeGETRequest(hostname, path, port,
-                               &proxy_client, server_fd);
+                         requestheader, server_fd);
 
         
         //now read from the server back to the client
-        serveToClient(connfd, &server_connection, hostname, path, 1);//cachestatus);
+        serveToClient(connfd, &server_connection, hostname, 
+            path, cachestatus, requestheader);
 
         //clean up
         close(server_fd);
@@ -420,29 +426,49 @@ void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port)
 
 //read the request from the 
 
-//copy request headers from the client to the server
+//copy request headers from the client into a buffer
 //guaranteed to be complete lines
-void copyRequest(int server_fd, rio_t* proxy_client)
+char* copyRequest(rio_t* proxy_client)
 {
+    int currentsize = MAX_OBJECT_SIZE;
+    char* tempbuffer = malloc(sizeof(char)*currentsize);
+    int bufferpos = 0;
+    ssize_t n;
     char buffer[MAXLINE];
-    while(rio_readlineb(proxy_client, buffer, MAXLINE) && 
+    while((n=rio_readlineb(proxy_client, buffer, MAXLINE)) && 
             strncmp(buffer, "\r", 1))
     {
         //don't send proxy-connection or cache-control headers
         if((strncmp(buffer, "Proxy-Connection: ", 18) != 0)
            && (strncmp(buffer, "Cache-Control: ", 14) != 0))
         {
-            rio_writen(server_fd, buffer, strlen(buffer));
-            //verbose_printf("->\t%s", buffer);
+            if((bufferpos + n) > currentsize-1)
+            {
+                currentsize *= 2;
+                tempbuffer = realloc(tempbuffer, currentsize);
+            }
+            bufferpos+=sprintf(&tempbuffer[bufferpos], "%s", buffer);
         }
-
     }
+    tempbuffer[bufferpos] = '\0';
+    char* requestheaders = calloc(bufferpos+1, sizeof(char));
+    memcpy(requestheaders, tempbuffer, bufferpos+1);
+    free(tempbuffer);
+    return requestheaders;
 }
 
+void writeRequest(int server_fd, char* buffer)
+{
+    if(rio_writen(server_fd, buffer, strlen(buffer)) <= 0)
+    {
+        //@TODO error handling
+    }
+    rio_writen(server_fd, "\r\n", 2);
+}
 void makeGETRequest(char* hostname, 
                     char* path,
                     int port, 
-                    rio_t* proxy_client,
+                    char* buffer,
                     int server_fd)
 {
     //make the GET request
@@ -452,23 +478,22 @@ void makeGETRequest(char* hostname,
     rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
     rio_writen(server_fd, "\r\n", strlen("\r\n"));
 
-    //verbose_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
+    verbose_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
 
-    copyRequest(server_fd, proxy_client);
-    //
-    //finish the request
-    rio_writen(server_fd, "\r\n", strlen("\r\n"));
+    writeRequest(server_fd, buffer);
 
     //@TODO: either use these params or remove them from the sig
     if(hostname == hostname || port == port){}
 }
 
 void serveToClient(int connfd, rio_t* server_connection, 
-        char* hostname, char* path, int cachestatus)
+        char* hostname, char* path, int cachestatus, char* cachereq)
 {
     int shouldcache = 0; //smart caching: do the headers say we should cache?
 
     //we'll build up this cache object
+    struct cachenode* cacheobj = malloc(sizeof(struct cachenode));
+	cacheobj->header = cachereq;
     
 
   
@@ -496,7 +521,7 @@ void serveToClient(int connfd, rio_t* server_connection,
 		n=sprintf(tempbuffer+bufferpos, "%s", buffer);
 		if(n > 0)
 		{
-			bufferpos+=n+1;
+			bufferpos+=n;
 		}
 		else
 		{
@@ -525,29 +550,12 @@ void serveToClient(int connfd, rio_t* server_connection,
        debug_printf("OMG HEADER SOOOO BIG \n");
     }
 	
-	object* cacheobj = malloc(sizeof(object));
+	//object* cacheobj = malloc(sizeof(object));
     
-	//sscanf(&tempbuffer[bufferpos], "\r\n");
-	//bufferpos+=2;
-	bufferpos+=sprintf(&tempbuffer[bufferpos], "\r\n" );
-	char *header = calloc(sizeof(char),bufferpos);
-	memcpy(header, tempbuffer, bufferpos);
+    tempbuffer[bufferpos++] = '\r';
+    tempbuffer[bufferpos++] = '\n';
+   
 	
-	pthread_rwlock_rdlock(&lock);
-	object *hit=query_cache(header);
-	if(hit)
-	{
-		rio_writen(connfd,hit->data,hit->size);
-		pthread_rwlock_unlock(&lock);
-		pthread_rwlock_wrlock(&lock);
-		hit->stamp = time(NULL);
-		pthread_rwlock_unlock(&lock);
-		verbose_printf("cache hit size %d\n",(int)hit->size);
-		return;
-	}
-	pthread_rwlock_unlock(&lock);
-	cacheobj->header = header;
-	debug_printf("header %s",header);	
 	
     //if we're absolutely not caching, then set shouldcache to false
     if(shouldcache == -1)
@@ -555,11 +563,9 @@ void serveToClient(int connfd, rio_t* server_connection,
         shouldcache = 0;
     }
     
-    //@TODO: cache this
-	bufferpos = 0;
-	tempbuffer [0] = '\0';
     while((n=rio_readnb(server_connection, buffer, MAXLINE)) >0)
     {
+        printf("Adding %d bytes\n", n);
         if(rio_writen(connfd, buffer, n) < 0)
         {
             printf("Error writing from %s%s\n", hostname, path);
@@ -568,19 +574,24 @@ void serveToClient(int connfd, rio_t* server_connection,
 			free(cacheobj);
 			return;
         }
-		n=sprintf(tempbuffer+bufferpos, "%s", buffer);
-		bufferpos += n+1;
+		//n=sprintf(tempbuffer+bufferpos, "%s", buffer);
+        if(bufferpos+n < MAX_OBJECT_SIZE)
+        {
+            memcpy(tempbuffer+bufferpos, buffer, n);
+        }
+        bufferpos += n;
         //verbose_printf("<-\t%s", buffer);
+
         memset(buffer, '\0', MAXLINE*sizeof(char));
-        //printf("\t Bufferpos is %d\n", bufferpos);
+        printf("\t Bufferpos is %d\n", bufferpos);
     }
-	debug_printf("data %s",tempbuffer);
+
 	char *data = calloc(sizeof(char),bufferpos);
 	memcpy(data, tempbuffer, bufferpos);
 	cacheobj->data = data;
 	cacheobj->size = bufferpos;
-	verbose_printf("size = %d\n",(int)(cacheobj->size));
-	if(cacheobj->size > MAX_OBJECT_SIZE)
+	debug_printf("size = %d\n",(int)(cacheobj->size));
+	if(cacheobj->size >= MAX_OBJECT_SIZE)
 	{
 		free(cacheobj->header);
 		free(cacheobj->data);
@@ -599,10 +610,9 @@ void serveToClient(int connfd, rio_t* server_connection,
             //@TODO: fix or delete arraylist cache
             //add_object(cacheobj);
 
-            debug_printf("Added object '%s' to the cache\n",
-                            cacheobj->header);
-            add_object(cacheobj);
-            add_object(cacheobj);
+            debug_printf("Added object '%s%s' to the cache\n",
+                            hostname, path);
+            add_cache_object(cacheobj);
         }
         else if(cachestatus == 2)
         {
@@ -611,10 +621,9 @@ void serveToClient(int connfd, rio_t* server_connection,
                 //@TODO: fix or delete arraylist cache
                 //add_object(cacheobj)
 
-                add_object(cacheobj);
-                add_object(cacheobj);
                 debug_printf("Added object '%s' to the cache\n",
                                 cacheobj->header);
+                add_cache_object(cacheobj);
             }
             else
             {
@@ -647,7 +656,13 @@ void serveToClient(int connfd, rio_t* server_connection,
 void add_cache_object(struct cachenode* obj)
 {
     if(obj->size > MAX_OBJECT_SIZE)
+    {
+        free(obj->header);
+        free(obj->data);
+        free(obj);
+        printf("Discarded object: too big\n");
         return; //discard it
+    }
     pthread_rwlock_wrlock(&cachelock);
     int availablesize = 1024*1024 - (int)thecache.totalsize;
     availablesize -= (int)obj->size;
