@@ -256,7 +256,7 @@ int main (int argc, char *argv []){
 	port = atoi(argv[1]);
 	printf("Proxy Started!\n==========================\n");
     printf("\tRunning on port %d\n\tRunning in %s\n"
-            "\tBrowse to http://proxy-configurator/"
+            "\tBrowse to http://proxy-configurator/ "
             "for info and options\n\nBy Jeff Cooper and Prashant Sridhar\n",
             port,
             #ifdef SEQUENTIAL
@@ -699,7 +699,7 @@ void add_cache_object(struct cachenode* obj)
         }
         struct cachenode* newend = end->prev;
         thecache.totalsize = thecache.totalsize - end->size;
-        printf("Freed %d bytes from the cache\n", end->size);
+        debug_printf("Freed %d bytes from the cache\n", end->size);
 
         freeNode(end);
         if(newend)
@@ -998,7 +998,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                       "Here's what's in the cache (in order):<br />"
                       "<table><tr><th>Size</th>"
                       "<th>Object (headers hidden)</th></tr>",
-                      (int)percentfull, thecache.totalsize, percentfull);
+                      2*(int)percentfull, thecache.totalsize, percentfull);
         rio_writen(connfd, data, n);
 
         struct cachenode* node = thecache.head;
