@@ -25,7 +25,6 @@
 #define MAX_CACHE_SIZE 1048576 /* 1 MB */
 
 //cache implemented as a lined list
-//@TODO: either finish implementing ArrayList cache or remove this comment
 struct cachenode
 {
     char* header;
@@ -45,19 +44,6 @@ struct listcache
 pthread_rwlock_t cachelock;
 
 
-//@TODO: fix this or remove it
-typedef struct {
-	char *header;
-	time_t stamp;
-	void *data;
-	size_t size;
-} object;
-
-int cacheSize;
-int cacheLength;
-int arrayLength;
-//arraylist of object pointers
-object **cache;
 
 //for handling the connection
 void handleConnection(int connfd);
@@ -67,9 +53,7 @@ void* newConnectionThread(void* arg);
 void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port);
 //make a GET request to the server
 //returns whether or not the headers think it's a good idea to cache
-void makeGETRequest(char* hostname, 
-                    char* path,
-                    int port,
+void makeGETRequest(char* path,
                     char* buffer,
                     int server_fd);
 //copy the HTTP request from the client to a buffer
@@ -87,22 +71,6 @@ void serveToClient(int connfd, rio_t* server_connection,
 void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE]);
 //change the host, request, and port based on feature settings
 int handleFeatures(char* hostname, char* path, int* port);
-
-/* 
- * Cache Functions
- * //@TODO: fix this or remove it
- */
-//add the object to the cache
-void add_object(object *o);
-//evict sufficient blocks to add an object of size size to the cache
-void make_space(size_t size);
-//query the cache for a header of size 
-object* query_cache(char *header);
-//grow the arraylist
-void grow_cache();
-
-pthread_rwlock_t lock;
-
 
 //List cache functions
 //add an object to the cache
@@ -139,78 +107,12 @@ struct features_t
 };
 struct features_t ft_config;;
 
-void add_object(object *o)
-{
-	pthread_rwlock_wrlock(&lock);
-	make_space(o->size);
-	if(arrayLength == cacheLength)
-		grow_cache();
-	int i=0;
-	for(i=0;i<arrayLength;i++){
-		if(cache[i] == NULL){
-			cache[i] = o;
-			break;
-		}
-	}
-	o->stamp = time(NULL);
-	cacheSize += o->size;
-	cacheLength++;
-	pthread_rwlock_unlock(&lock);
-}
-
-void grow_cache()
-{
-    cache = realloc(cache,sizeof(object *)*2*arrayLength);
-}
-
-void make_space(size_t size)
-{
-    
-	while((unsigned)cacheSize >= MAX_CACHE_SIZE - size)
-	{
-		int i = 0;
-		int min=0;
-		for(i=0;i<arrayLength;i++){
-			if(cache[i] && cache[i]->stamp < cache[min]->stamp)
-				min = i;
-		}
-		cacheLength--;
-		cacheSize -= cache[min]->size;
-		free(cache[min]->header);
-		free(cache[min]->data);
-		free(cache[min]);
-		cache[min] = NULL;
-	}
-}
-
-int chrcmpn(char *s1,char *s2,int n)
-{
-	int i;
-	int sum=0;
-	for(i=0;i<n;i++)
-		sum+= s1[i] - s2[i];
-	return sum;
-}
-
-object *query_cache(char *header)
-{
-	int i=0;
-	object *result = NULL;
-	for(i=0;i<arrayLength;i++)
-	{
-		if(cache[i] && 
-		   !strncmp(cache[i]->header,header,strlen(cache[i]->header)))
-		{
-			return cache[i];
-		}
-	}
-	return result;
-}
 
 int open_clientfd_r(char *hostname, int port) 
 {
     int clientfd;
     struct hostent *hp;
+	struct hostent ret;
     struct sockaddr_in serveraddr;
 	//@TODO: Are socket and connect thread safe
     if ((clientfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
@@ -218,10 +120,11 @@ int open_clientfd_r(char *hostname, int port)
 	
     /* Fill in the server's IP address and port */
 
-    //@TODO: use gethostbyname_r
-
-    if ((hp = gethostbyname(hostname)) == NULL)
-		return -2; /* check h_errno for cause of error */
+    char buffer[MAXLINE];
+	int errno;
+	
+    if (gethostbyname_r(hostname,&ret,buffer,MAXLINE,&hp,&errno) != 0)
+		return errno; 
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
     bcopy((char *)hp->h_addr_list[0], 
@@ -237,18 +140,11 @@ int open_clientfd_r(char *hostname, int port)
 
 
 int main (int argc, char *argv []){
-	//@TODO: sigactions
-    // wait, what?
 	signal(SIGPIPE, SIG_IGN);
 	
 	int listenfd, connfd, port;
     socklen_t clientlen;
 	struct sockaddr_in clientaddr;
-	//cache = malloc(sizeof(object *) * 10);
-	cacheLength = 0;
-	cacheSize = 0;
-	arrayLength = 10;
-	pthread_rwlock_init(&lock,NULL);
 	if(argc != 2){
 		fprintf(stderr,"Usage %s <port>\n",argv[0]);
 		exit(1);
@@ -357,7 +253,6 @@ void handleConnection(int connfd){
             char name[strlen(hostname)+strlen(path)+1];
             sprintf(name, "%s%s", hostname, path);
             struct cachenode* obj = get_cache_object(name, requestheader);
-            //object* obj = query_cache(header);
             if(obj)
             {
                 debug_printf("Serving object %s from the cache! (Size %u)\n",
@@ -388,7 +283,7 @@ void handleConnection(int connfd){
         //open the connection to the remote server
         //@TODO: change this back
         //if((server_fd = open_clientfd_r(hostname, port)) < 0)
-        if((server_fd = open_clientfd(hostname, port)) < 0)
+        if((server_fd = open_clientfd_r(hostname, port)) < 0)
         {
             char errorbuf[] = "HTTP 404 NOTFOUND\r\n\r\n404 Not Found\r\n";
             rio_writen(connfd, errorbuf, strlen(errorbuf));
@@ -398,8 +293,7 @@ void handleConnection(int connfd){
         rio_readinitb(&server_connection, server_fd);
 
         //now, make the GET request to the server
-        makeGETRequest(hostname, path, port,
-                         requestheader, server_fd);
+        makeGETRequest(path,requestheader, server_fd);
 
         
         //now read from the server back to the client
@@ -492,9 +386,7 @@ void writeRequest(int server_fd, char* buffer)
     }
     rio_writen(server_fd, "\r\n", 2);
 }
-void makeGETRequest(char* hostname, 
-                    char* path,
-                    int port, 
+void makeGETRequest(char* path,
                     char* buffer,
                     int server_fd)
 {
@@ -509,8 +401,6 @@ void makeGETRequest(char* hostname,
 
     writeRequest(server_fd, buffer);
 
-    //@TODO: either use these params or remove them from the sig
-    if(hostname == hostname || port == port){}
 }
 
 void serveToClient(int connfd, rio_t* server_connection, 
@@ -579,8 +469,6 @@ void serveToClient(int connfd, rio_t* server_connection,
     {
        debug_printf("OMG HEADER SOOOO BIG \n");
     }
-	
-	//object* cacheobj = malloc(sizeof(object));
     
     tempbuffer[bufferpos++] = '\r';
     tempbuffer[bufferpos++] = '\n';
@@ -636,7 +524,6 @@ void serveToClient(int connfd, rio_t* server_connection,
         if(cachestatus == 1) //1 = cache, 2 = smart cache, 0 = don't cache
         {
             //@TODO: fix or delete arraylist cache
-            //add_object(cacheobj);
 
             debug_printf("Added object '%s%s' to the cache\n",
                             hostname, path);
@@ -647,7 +534,6 @@ void serveToClient(int connfd, rio_t* server_connection,
             if(shouldcache)
             {
                 //@TODO: fix or delete arraylist cache
-                //add_object(cacheobj)
 
                 debug_printf("Added object '%s' to the cache\n",
                                 cacheobj->header);
