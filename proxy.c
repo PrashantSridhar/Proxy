@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#define SEQUENTIAL
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +32,7 @@ struct cachenode
 {
     char* header;
     void* data;
+    char* objname;
     int size;
     struct cachenode* prev;
     struct cachenode* next;
@@ -109,9 +111,14 @@ pthread_rwlock_t lock;
 void add_cache_object(struct cachenode* obj);
 //find an object in the cache based on header, and update LRU
 //return NULL if not found
-struct cachenode* get_cache_object(char* header);
+struct cachenode* get_cache_object(char* objname, char* header);
 //clear the cache
 void clear_cache();
+
+//new cachenode
+struct cachenode* newNode();
+//free node
+void freeNode(struct cachenode* n);
 
 //global cache variable
 struct listcache thecache;
@@ -233,12 +240,13 @@ int open_clientfd_r(char *hostname, int port)
 
 int main (int argc, char *argv []){
 	//@TODO: sigactions
+    // wait, what?
 	signal(SIGPIPE, SIG_IGN);
 	
 	int listenfd, connfd, port;
     socklen_t clientlen;
 	struct sockaddr_in clientaddr;
-	cache = malloc(sizeof(object *) * 10);
+	//cache = malloc(sizeof(object *) * 10);
 	cacheLength = 0;
 	cacheSize = 0;
 	arrayLength = 10;
@@ -335,7 +343,9 @@ void handleConnection(int connfd){
         //search the cache
         if(cachestatus)
         {
-            struct cachenode* obj = get_cache_object(requestheader);
+            char name[strlen(hostname)+strlen(path)+1];
+            sprintf(name, "%s%s", hostname, path);
+            struct cachenode* obj = get_cache_object(name, requestheader);
             //object* obj = query_cache(header);
             if(obj)
             {
@@ -347,9 +357,7 @@ void handleConnection(int connfd){
                 {
                     printf("PANIC! Didn't successfully write the object\n");
                 }
-                free(obj->data);
-                free(obj->header);
-                free(obj);
+                freeNode(obj);
 
                 close(connfd);
                 return;
@@ -367,7 +375,9 @@ void handleConnection(int connfd){
 
 
         //open the connection to the remote server
-        if((server_fd = open_clientfd_r(hostname, port)) < 0)
+        //@TODO: change this back
+        //if((server_fd = open_clientfd_r(hostname, port)) < 0)
+        if((server_fd = open_clientfd(hostname, port)) < 0)
         {
             char errorbuf[] = "HTTP 404 NOTFOUND\r\n\r\n404 Not Found\r\n";
             rio_writen(connfd, errorbuf, strlen(errorbuf));
@@ -388,6 +398,12 @@ void handleConnection(int connfd){
         //clean up
         close(server_fd);
         //debug_printf("Closed connection to %s%s\n", hostname, path);
+    }
+    else
+    {
+        //if we don't have a GET request with http, throw an error
+        char errorbuf[] = "HTTP 500 ERROR\r\n\r\n";
+        rio_writen(connfd, errorbuf, strlen(errorbuf));
     }
     close(connfd);
 }
@@ -492,7 +508,9 @@ void serveToClient(int connfd, rio_t* server_connection,
     int shouldcache = 0; //smart caching: do the headers say we should cache?
 
     //we'll build up this cache object
-    struct cachenode* cacheobj = malloc(sizeof(struct cachenode));
+    struct cachenode* cacheobj = newNode();
+    cacheobj->objname = calloc(strlen(hostname)+strlen(path)+1, sizeof(char));
+    sprintf(cacheobj->objname, "%s%s", hostname, path);
 	cacheobj->header = cachereq;
     
 
@@ -501,6 +519,7 @@ void serveToClient(int connfd, rio_t* server_connection,
     int bufferpos=0;
 
     char buffer[MAXLINE];
+    memset(buffer, '\0', MAXLINE);
 
     int n = 0; //number of bytes
     while(((n=rio_readlineb(server_connection, buffer, MAXLINE)) != 0) && 
@@ -565,13 +584,11 @@ void serveToClient(int connfd, rio_t* server_connection,
     
     while((n=rio_readnb(server_connection, buffer, MAXLINE)) >0)
     {
-        printf("Adding %d bytes\n", n);
         if(rio_writen(connfd, buffer, n) < 0)
         {
             printf("Error writing from %s%s\n", hostname, path);
             //error on write
-            free(cacheobj->header);
-			free(cacheobj);
+            freeNode(cacheobj);
 			return;
         }
 		//n=sprintf(tempbuffer+bufferpos, "%s", buffer);
@@ -585,24 +602,26 @@ void serveToClient(int connfd, rio_t* server_connection,
         memset(buffer, '\0', MAXLINE*sizeof(char));
         printf("\t Bufferpos is %d\n", bufferpos);
     }
-
-	char *data = calloc(sizeof(char),bufferpos);
-	memcpy(data, tempbuffer, bufferpos);
-	cacheobj->data = data;
+    
+	if(bufferpos < MAX_OBJECT_SIZE)
+    {
+        char *data = calloc(sizeof(char),bufferpos);
+    	memcpy(data, tempbuffer, bufferpos);
+        cacheobj->data = data;
+    }
 	cacheobj->size = bufferpos;
 	debug_printf("size = %d\n",(int)(cacheobj->size));
 	if(cacheobj->size >= MAX_OBJECT_SIZE)
 	{
-		free(cacheobj->header);
-		free(cacheobj->data);
-		free(cacheobj);
+        freeNode(cacheobj);
+        cacheobj = NULL;
 	}
 	
     if(cacheobj)
     {
         cacheobj->size = bufferpos;
         printf("Bufferpos %d stored as size %d\n", bufferpos, (int)cacheobj->size);
-        cacheobj->data = malloc(bufferpos * sizeof(char));
+        cacheobj->data = calloc(bufferpos, sizeof(char));
         memcpy(cacheobj->data, tempbuffer, bufferpos);
 
         if(cachestatus == 1) //1 = cache, 2 = smart cache, 0 = don't cache
@@ -629,17 +648,13 @@ void serveToClient(int connfd, rio_t* server_connection,
             {
                 //smart caching says no
                 debug_printf("Smart cache: skipping the cache\n");
-                free(cacheobj->header);
-                free(cacheobj->data);
-                free(cacheobj);
+                freeNode(cacheobj);
             }
         }
         else
         {
             debug_printf("Cache disabled: skipping the cache\n");
-            free(cacheobj->header);
-            free(cacheobj->data);
-            free(cacheobj);
+            freeNode(cacheobj);
         }
     }
     else
@@ -657,9 +672,7 @@ void add_cache_object(struct cachenode* obj)
 {
     if(obj->size > MAX_OBJECT_SIZE)
     {
-        free(obj->header);
-        free(obj->data);
-        free(obj);
+        freeNode(obj);
         printf("Discarded object: too big\n");
         return; //discard it
     }
@@ -679,9 +692,7 @@ void add_cache_object(struct cachenode* obj)
         thecache.totalsize = thecache.totalsize - end->size;
         printf("Freed %d bytes from the cache\n", end->size);
 
-        free(end->header);
-        free(end->data);
-        free(end);
+        freeNode(end);
         if(newend)
             newend->next = NULL;
         thecache.tail = newend;
@@ -709,7 +720,7 @@ void add_cache_object(struct cachenode* obj)
 
 //find an object in the cache based on header, and update LRU
 //return NULL if not found
-struct cachenode* get_cache_object(char* header)
+struct cachenode* get_cache_object(char* hostpath, char* header)
 {
     //@TODO: actually use readlocking
     //right now, we just use write locking for LRU
@@ -717,7 +728,8 @@ struct cachenode* get_cache_object(char* header)
     struct cachenode* obj = thecache.head;
     while(obj)
     {
-        if(strcmp(obj->header, header) == 0)
+        if(strcmp(obj->objname, hostpath) == 0 
+           && strcmp(obj->header, header) == 0)
         {
             //found cache object
             //move it to the head of the list
@@ -742,7 +754,7 @@ struct cachenode* get_cache_object(char* header)
             //after return but before usage
             //
             //it is the caller's responsibility to free it
-            struct cachenode* ret = malloc(sizeof(struct cachenode));
+            struct cachenode* ret = newNode();
             ret->data = malloc(obj->size);
             memcpy(ret->data, obj->data, obj->size);
             ret->size = obj->size;
@@ -766,9 +778,7 @@ void clear_cache()
     while(n)
     {
         struct cachenode* next = n->next;
-        free(n->header);
-        free(n->data);
-        free(n);
+        freeNode(n);
         n = next;
     }
     thecache.head = NULL;
@@ -777,6 +787,24 @@ void clear_cache()
     pthread_rwlock_unlock(&cachelock);
 }
 
+//new cachenode
+struct cachenode* newNode()
+{
+    struct cachenode* n = malloc(sizeof(struct cachenode));
+    n->objname=NULL;
+    n->size = 0;
+    n->header = NULL;
+    n->data = NULL;
+    return n;
+}
+//free node
+void freeNode(struct cachenode* n)
+{
+    free(n->header);
+    free(n->objname);
+    free(n->data);
+    free(n);
+}
 /*************
  ** Feature Functions
  ** Not related to the core functionality of the proxy
@@ -947,7 +975,13 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         double percentfull = ((double)thecache.totalsize*100.0);
         percentfull /= (double)MAX_CACHE_SIZE;
 
-        n = sprintf(data, "Total cache size is <b>%u bytes (%.2f%%)</b>"
+        n = sprintf(data,
+                      "<div "
+                      "style='width:200px;border:1px black solid;height:30px;'>"
+                      "<div "
+                      "style='width:%dpx;background-color:red;height:30px;'>"
+                      "</div></div>"
+                      "Total cache size is <b>%u bytes (%.2f%%)</b>"
                       "<br /><br />"
                       "<style>"
                       "table{table-layout: fixed;}"
@@ -955,8 +989,8 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                       "</style>"
                       "Here's what's in the cache (in order):<br />"
                       "<table><tr><th>Size</th>"
-                      "<th>Header</th></tr>",
-                      thecache.totalsize, percentfull);
+                      "<th>Object (headers hidden)</th></tr>",
+                      (int)percentfull, thecache.totalsize, percentfull);
         rio_writen(connfd, data, n);
 
         struct cachenode* node = thecache.head;
@@ -965,7 +999,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
             n=sprintf(data, "<tr>"
                             "<td>%u bytes</td><td>%s</td>"
                             "</tr>", 
-                                node->size, node->header);
+                                node->size, node->objname);
             rio_writen(connfd, data, n);
             node = node->next;
         }
