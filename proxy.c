@@ -9,7 +9,6 @@
 
 #include "csapp.h"
 
-#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
@@ -255,7 +254,20 @@ int main (int argc, char *argv []){
 		exit(1);
 	}
 	port = atoi(argv[1]);
-	listenfd = open_listenfd(port);
+	printf("Proxy Started!\n==========================\n");
+    printf("\tRunning on port %d\n\tRunning in %s\n"
+            "\tBrowse to http://proxy-configurator/"
+            "for info and options\n\nBy Jeff Cooper and Prashant Sridhar\n",
+            port,
+            #ifdef SEQUENTIAL
+            "sequenial mode"
+            #else
+            "parallel mode"
+            #endif
+            );
+
+    listenfd = open_listenfd(port);
+
 
     //init features
     //don't lock because it doesn't matter here (no threads)
@@ -599,7 +611,6 @@ void serveToClient(int connfd, rio_t* server_connection,
         //verbose_printf("<-\t%s", buffer);
 
         memset(buffer, '\0', MAXLINE*sizeof(char));
-        printf("\t Bufferpos is %d\n", bufferpos);
     }
     
 	if(bufferpos < MAX_OBJECT_SIZE)
@@ -619,7 +630,6 @@ void serveToClient(int connfd, rio_t* server_connection,
     if(cacheobj)
     {
         cacheobj->size = bufferpos;
-        printf("Bufferpos %d stored as size %d\n", bufferpos, (int)cacheobj->size);
         cacheobj->data = calloc(bufferpos, sizeof(char));
         memcpy(cacheobj->data, tempbuffer, bufferpos);
 
@@ -697,7 +707,6 @@ void add_cache_object(struct cachenode* obj)
         thecache.tail = newend;
         availablesize = 1024*1024 - (int)thecache.totalsize - obj->size;
     }
-    printf("\n\nAvailable size: %d\n\n", availablesize);
 
     //@FIXME: this is like an assert
     if(availablesize < 0){exit(1);}
