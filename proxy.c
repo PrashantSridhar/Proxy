@@ -604,13 +604,34 @@ void add_cache_object(struct cachenode* obj)
     pthread_rwlock_unlock(&cachelock);
 }
 
+
+void updateNode(struct cachenode *obj)
+{
+	//move it to the head of the list
+	struct cachenode* prev = obj->prev;
+	struct cachenode* next = obj->next;
+	if(prev)
+		prev->next = next;
+	if(next)
+		next->prev = prev;
+	obj->prev = NULL;
+	obj->next = thecache.head;
+	if(obj->next == obj)
+	{
+		obj->next = NULL;
+	}
+	if(obj->next)
+		obj->next->prev = obj;
+	thecache.head = obj;
+		
+}
 //find an object in the cache based on header, and update LRU
 //return NULL if not found
 struct cachenode* get_cache_object(char* hostpath, char* header)
 {
     //@TODO: actually use readlocking
     //right now, we just use write locking for LRU
-    pthread_rwlock_wrlock(&cachelock);
+    pthread_rwlock_rdlock(&cachelock);
     struct cachenode* obj = thecache.head;
     while(obj)
     {
@@ -618,23 +639,6 @@ struct cachenode* get_cache_object(char* hostpath, char* header)
            && strcmp(obj->header, header) == 0)
         {
             //found cache object
-            //move it to the head of the list
-            struct cachenode* prev = obj->prev;
-            struct cachenode* next = obj->next;
-            if(prev)
-                prev->next = next;
-            if(next)
-                next->prev = prev;
-            obj->prev = NULL;
-            obj->next = thecache.head;
-            if(obj->next == obj)
-            {
-                obj->next = NULL;
-            }
-            if(obj->next)
-                obj->next->prev = obj;
-            thecache.head = obj;
-
             //now we allocate a new cache object, copy the entry into it, and
             //return that instead. We do this in case the cache entry gets freed
             //after return but before usage
@@ -646,7 +650,9 @@ struct cachenode* get_cache_object(char* hostpath, char* header)
             ret->size = obj->size;
             ret->header = NULL; //we don't care about the header, and free(NULL)
                                 //                                 does nothing.
-            pthread_rwlock_unlock(&cachelock);
+            pthread_rwlock_wrlock(&cachelock);
+			updateNode(obj);
+			pthread_rwlock_unlock(&cachelock);
             return ret;
         }
         obj = obj->next;
