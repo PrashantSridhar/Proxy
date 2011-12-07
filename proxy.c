@@ -15,7 +15,7 @@
  ** handling functions (which have been renamed to tt_Rio_*).
  **
  **/
-#include "csapp_threads.h"
+#include "csapp.h"
 
 #ifndef DEBUG
 #define debug_printf(...) {}
@@ -88,6 +88,8 @@ void add_cache_object(struct cachenode* obj);
 struct cachenode* get_cache_object(char* objname, char* header);
 //clear the cache
 void clear_cache();
+//cache unlock handler: if a thread dies, unlock the cache
+void unlock_cache_handler(void* ptr);
 
 //new cachenode
 struct cachenode* newNode();
@@ -740,6 +742,13 @@ void free_node(struct cachenode* n)
     free(n->data);
     free(n);
 }
+
+//handler function to unlock the cache if a thread dies
+void unlock_cache_handler(void* ptr)
+{
+    pthread_rwlock_unlock((pthread_rwlock_t*)ptr);
+}
+
 /*************
  ** Feature Functions
  ** Not related to the core functionality of the proxy
@@ -970,7 +979,7 @@ void feature_console(int connfd, rio_t* proxy_client, char path[MAXLINE])
         t_Rio_writen(connfd, options, strlen(options));
 
         //if the thread dies on read (pthread_exit), have it unlock the cache
-        pthread_cleanup_push(pthread_rwlock_unlock, (void*)&cachelock);
+        pthread_cleanup_push(unlock_cache_handler, (void*)&cachelock);
 
 
         struct cachenode* node = thecache.head;
