@@ -16,7 +16,6 @@
  **/
 #include "csapp_threads.h"
 
-#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
@@ -924,7 +923,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                       2*(int)percentfull, thecache.totalsize, percentfull);
 
         //if the thread dies on read (pthread_exit), have it unlock the cache
-        pthread_cleanup_push(pthread_rwlock_unlock, &cachelock);
+        pthread_cleanup_push(pthread_rwlock_unlock, (void*)&cachelock);
         t_Rio_writen(connfd, data, n);
 
 
