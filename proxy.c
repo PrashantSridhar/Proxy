@@ -574,12 +574,6 @@ void add_cache_object(struct cachenode* obj)
     }
     debug_printf("Write locking the cache to add an object\n");
     pthread_rwlock_wrlock(&cachelock);
-<<<<<<< HEAD
-    int availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize;
-    availablesize -= (int)obj->size;
-
-    while(availablesize < 0)
-=======
 
     //now add the new entry to the front of the list
     obj->prev = NULL;
@@ -593,17 +587,13 @@ void add_cache_object(struct cachenode* obj)
 
 
     while(thecache.totalsize > MAX_CACHE_SIZE)
->>>>>>> f03c4d025757a14f83b240dc76ce1681c03adce5
     {
         //while there's not enough space, knock out oldest entry
         struct cachenode* end = thecache.tail;
         if(end == NULL)
         {
-<<<<<<< HEAD
-=======
             thecache.totalsize = 0;
             thecache.head = NULL;
->>>>>>> f03c4d025757a14f83b240dc76ce1681c03adce5
             break;
         }
         struct cachenode* newend = end->prev;
@@ -614,20 +604,7 @@ void add_cache_object(struct cachenode* obj)
         if(newend)
             newend->next = NULL;
         thecache.tail = newend;
-<<<<<<< HEAD
-        availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize - obj->size;
-    }
 
-    //now add the new entry to the front of the list
-    obj->prev = NULL;
-    obj->next = thecache.head;
-    if(obj->next)
-        obj->next->prev = obj;
-    thecache.head = obj;
-    if(thecache.tail == NULL)
-        thecache.tail = obj;
-    thecache.totalsize += obj->size;
-=======
         //if we've freed the whole cache, update the head pointer appropriately 
         if(thecache.tail == NULL)
         {
@@ -635,9 +612,6 @@ void add_cache_object(struct cachenode* obj)
             thecache.totalsize = 0;
         }
     }
-
-    debug_printf("\tNew total cache size is %u\n", thecache.totalsize);
->>>>>>> f03c4d025757a14f83b240dc76ce1681c03adce5
 
     debug_printf("\tNew total cache size is %u\n", thecache.totalsize);
     
@@ -764,7 +738,6 @@ void freeNode(struct cachenode* n)
     free(n);
 }
 
-<<<<<<< HEAD
 void sigint_handler(int sig){
 	sig=sig;
 	clear_cache();
@@ -772,14 +745,13 @@ void sigint_handler(int sig){
 	pthread_mutex_destroy(&features_mutex);
 	exit(0);
 }
-=======
+
 //handler function to unlock the cache if a thread dies
 void unlock_cache_handler(void* ptr)
 {
     pthread_rwlock_unlock((pthread_rwlock_t*)ptr);
 }
 
->>>>>>> f03c4d025757a14f83b240dc76ce1681c03adce5
 /*************
  ** Feature Functions
  ** Not related to the core functionality of the proxy
@@ -967,12 +939,9 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                       2*(int)percentfull, thecache.totalsize, percentfull);
 
         //if the thread dies on read (pthread_exit), have it unlock the cache
-<<<<<<< HEAD
-        pthread_cleanup_push(pthread_rwlock_unlock, &cachelock);
-        t_Rio_writen(connfd, data, n);
-=======
         pthread_cleanup_push(unlock_cache_handler, (void*)&cachelock);
->>>>>>> f03c4d025757a14f83b240dc76ce1681c03adce5
+
+        t_Rio_writen(connfd, data, n);
 
 
         struct cachenode* node = thecache.head;
