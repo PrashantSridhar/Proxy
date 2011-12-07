@@ -284,12 +284,6 @@ void handle_connection(int connfd){
             }
         }
 
-        //some debug statements
-       // debug_printf("Trying to contact hostname %s on port %d\n",
-        //              hostname, port);
-        //debug_printf("I'll ask him for the path '%s'\n", path);
-
-
         //open the connection to the remote server
 		//pthread_rwlock_rdlock(&cachelock);
 		if((server_fd = open_clientfd_r(hostname, port)) < 0)
@@ -492,7 +486,6 @@ void serve_to_client(int connfd, rio_t* server_connection,
     {
         if(rio_writen(connfd, buffer, n) < 0)
         {
-            //@TODO: fails often. dunno why
 			printf("Error writing from %s%s\n", hostname, path);
             //error on write
             free_node(cacheobj);
@@ -757,7 +750,6 @@ void unlock_cache_handler(void* ptr)
 //returns whether or not caching is enabled
 int handle_features(char* hostname, char* path, int* port)
 {
-    //@TODO: reader/writer lock on features
     struct features_t features;
 
     pthread_mutex_lock(&features_mutex);
