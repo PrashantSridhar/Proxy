@@ -575,7 +575,7 @@ void add_cache_object(struct cachenode* obj)
     }
     debug_printf("Write locking the cache to add an object\n");
     pthread_rwlock_wrlock(&cachelock);
-    int availablesize = 1024*1024 - (int)thecache.totalsize;
+    int availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize;
     availablesize -= (int)obj->size;
 
     while(availablesize < 0)
@@ -594,7 +594,7 @@ void add_cache_object(struct cachenode* obj)
         if(newend)
             newend->next = NULL;
         thecache.tail = newend;
-        availablesize = 1024*1024 - (int)thecache.totalsize - obj->size;
+        availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize - obj->size;
     }
 
     //now add the new entry to the front of the list
@@ -917,7 +917,11 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                       "<table><tr><th>Size</th>"
                       "<th>Object (headers hidden)</th></tr>",
                       2*(int)percentfull, thecache.totalsize, percentfull);
+
+        //if the thread dies on read (pthread_exit), have it unlock the cache
+        pthread_cleanup_push(pthread_rwlock_unlock, &cachelock);
         t_Rio_writen(connfd, data, n);
+
 
         struct cachenode* node = thecache.head;
         while(node)
@@ -931,6 +935,10 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         }
         n=sprintf(data, "</table>");
         t_Rio_writen(connfd, data, n);
+        
+        //we don't want to double-unlock the cache, so pop off the cleanup
+        //handler
+        pthread_cleanup_pop(0);
 
         pthread_rwlock_unlock(&cachelock);
     }
