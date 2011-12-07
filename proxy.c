@@ -7,8 +7,16 @@
 #include <sys/time.h>
 #include <time.h>
 
-#include "csapp.h"
+/******************
+ ** NOTE: using the thread-friendly version of csapp.*
+ ** This is a version that we modified to use pthread_exit() instead of exit()
+ ** when it dies, allowing us to take advantage of the capital-letter error
+ ** handling functions (which have been renamed to tt_Rio_*).
+ **
+ **/
+#include "csapp_threads.h"
 
+#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
@@ -126,6 +134,8 @@ int open_clientfd_r(char *hostname, int port)
 		return errno; 
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
+    if(!hp)
+        return -1;
     bcopy((char *)hp->h_addr_list[0], 
 		  (char *)&serveraddr.sin_addr.s_addr, hp->h_length);
     serveraddr.sin_port = htons(port);
@@ -213,13 +223,13 @@ void handleConnection(int connfd){
     char buffer[MAXLINE];
     memset(buffer, '\0', MAXLINE*sizeof(char));
     rio_t proxy_client;
-    Rio_readinitb(&proxy_client, connfd);
+    t_Rio_readinitb(&proxy_client, connfd);
 
     int server_fd;
     rio_t server_connection;
 
     //get the first line of the request into the buffer
-    Rio_readlineb(&proxy_client, buffer, MAXLINE);
+    t_Rio_readlineb(&proxy_client, buffer, MAXLINE);
     if(strncmp(buffer, "GET http:", 9) == 0)
     {
         //we've got a get request
@@ -259,7 +269,7 @@ void handleConnection(int connfd){
                         path, (unsigned)obj->size);
 
                 
-                Rio_writen(connfd, obj->data, obj->size);
+                t_Rio_writen(connfd, obj->data, obj->size);
                 freeNode(obj);
 
                 close(connfd);
@@ -281,11 +291,11 @@ void handleConnection(int connfd){
 		if((server_fd = open_clientfd_r(hostname, port)) < 0)
         {
             char errorbuf[] = "HTTP 404 NOTFOUND\r\n\r\n404 Not Found\r\n";
-            Rio_writen(connfd, errorbuf, strlen(errorbuf));
+            t_Rio_writen(connfd, errorbuf, strlen(errorbuf));
             close(connfd);
             return;
         }
-        Rio_readinitb(&server_connection, server_fd);
+        t_Rio_readinitb(&server_connection, server_fd);
 
         //now, make the GET request to the server
         makeGETRequest(path,requestheader, server_fd);
@@ -303,7 +313,7 @@ void handleConnection(int connfd){
     {
         //if we don't have a GET request with http, throw an error
         char errorbuf[] = "HTTP 500 ERROR\r\n\r\n";
-        Rio_writen(connfd, errorbuf, strlen(errorbuf));
+        t_Rio_writen(connfd, errorbuf, strlen(errorbuf));
     }
     close(connfd);
 }
@@ -351,7 +361,7 @@ char* copyRequest(rio_t* proxy_client)
     int bufferpos = 0;
     ssize_t n;
     char buffer[MAXLINE];
-    while((n=Rio_readlineb(proxy_client, buffer, MAXLINE)) && 
+    while((n=t_Rio_readlineb(proxy_client, buffer, MAXLINE)) && 
             strncmp(buffer, "\r", 1))
     {
         //don't send proxy-connection or cache-control headers
@@ -375,19 +385,19 @@ char* copyRequest(rio_t* proxy_client)
 
 void writeRequest(int server_fd, char* buffer)
 {
-    Rio_writen(server_fd, buffer, strlen(buffer));
-   	Rio_writen(server_fd, "\r\n", 2);
+    t_Rio_writen(server_fd, buffer, strlen(buffer));
+   	t_Rio_writen(server_fd, "\r\n", 2);
 }
 void makeGETRequest(char* path,
                     char* buffer,
                     int server_fd)
 {
     //make the GET request
-    Rio_writen(server_fd, "GET ", strlen("GET "));
-    Rio_writen(server_fd, path, strlen(path));
-    Rio_writen(server_fd, " ", strlen(" "));
-    Rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
-    Rio_writen(server_fd, "\r\n", strlen("\r\n"));
+    t_Rio_writen(server_fd, "GET ", strlen("GET "));
+    t_Rio_writen(server_fd, path, strlen(path));
+    t_Rio_writen(server_fd, " ", strlen(" "));
+    t_Rio_writen(server_fd, "HTTP/1.0", strlen("HTTP/1.0"));
+    t_Rio_writen(server_fd, "\r\n", strlen("\r\n"));
 
     verbose_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
 
@@ -415,7 +425,7 @@ void serveToClient(int connfd, rio_t* server_connection,
     memset(buffer, '\0', MAXLINE);
 
     int n = 0; //number of bytes
-    while(((n=Rio_readlineb(server_connection, buffer, MAXLINE)) != 0) && 
+    while(((n=t_Rio_readlineb(server_connection, buffer, MAXLINE)) != 0) && 
             buffer[0] != '\r')
     {
         //verbose_printf("<-\t%s", buffer);
@@ -455,7 +465,7 @@ void serveToClient(int connfd, rio_t* server_connection,
             shouldcache = -1;
         }
     }
-    Rio_writen(connfd, "\r\n", strlen("\r\n"));
+    t_Rio_writen(connfd, "\r\n", strlen("\r\n"));
     
     if((bufferpos+2) >= MAX_OBJECT_SIZE)
     {
@@ -473,7 +483,7 @@ void serveToClient(int connfd, rio_t* server_connection,
         shouldcache = 0;
     }
     
-    while((n=Rio_readnb(server_connection, buffer, MAXLINE)) >0)
+    while((n=t_Rio_readnb(server_connection, buffer, MAXLINE)) >0)
     {
         if(rio_writen(connfd, buffer, n) < 0)
         {
@@ -563,6 +573,7 @@ void add_cache_object(struct cachenode* obj)
         printf("Discarded object: too big\n");
         return; //discard it
     }
+    debug_printf("Write locking the cache to add an object\n");
     pthread_rwlock_wrlock(&cachelock);
     int availablesize = 1024*1024 - (int)thecache.totalsize;
     availablesize -= (int)obj->size;
@@ -586,9 +597,6 @@ void add_cache_object(struct cachenode* obj)
         availablesize = 1024*1024 - (int)thecache.totalsize - obj->size;
     }
 
-    //@FIXME: this is like an assert
-    if(availablesize < 0){exit(1);}
-
     //now add the new entry to the front of the list
     obj->prev = NULL;
     obj->next = thecache.head;
@@ -600,13 +608,33 @@ void add_cache_object(struct cachenode* obj)
     thecache.totalsize += obj->size;
 
     debug_printf("\tNew total cache size is %u\n", thecache.totalsize);
-
+    
+    debug_printf("Unlocking the cache from writing\n");
     pthread_rwlock_unlock(&cachelock);
 }
 
 
-void updateNode(struct cachenode *obj)
+void updateNode(struct cachenode *which)
 {
+    debug_printf("Locking the cache to update LRU\n");
+    pthread_rwlock_wrlock(&cachelock);
+    //find the object in the cache.  If it has since been removed by a
+    //concurrent process, give up.
+    struct cachenode* obj = thecache.head;
+    
+    while(obj && obj != which)
+    {
+        obj = obj->next;
+    }
+
+    if(!obj)
+    {
+        //we didn't find it, unlock the cache and give up.
+        debug_printf("Unlocked the cache from LRU update (unsuccessful)\n");
+        pthread_rwlock_unlock(&cachelock);
+        return;
+    }
+
 	//move it to the head of the list
 	struct cachenode* prev = obj->prev;
 	struct cachenode* next = obj->next;
@@ -623,15 +651,17 @@ void updateNode(struct cachenode *obj)
 	if(obj->next)
 		obj->next->prev = obj;
 	thecache.head = obj;
+    pthread_rwlock_unlock(&cachelock);
+    debug_printf("Unlocked the cache from LRU update\n");
 		
 }
 //find an object in the cache based on header, and update LRU
 //return NULL if not found
 struct cachenode* get_cache_object(char* hostpath, char* header)
 {
-    //@TODO: actually use readlocking
-    //right now, we just use write locking for LRU
+    debug_printf("Read-locking the cache to search it\n");
     pthread_rwlock_rdlock(&cachelock);
+    debug_printf("\tGot lock\n");
     struct cachenode* obj = thecache.head;
     while(obj)
     {
@@ -650,13 +680,15 @@ struct cachenode* get_cache_object(char* hostpath, char* header)
             ret->size = obj->size;
             ret->header = NULL; //we don't care about the header, and free(NULL)
                                 //                                 does nothing.
-            pthread_rwlock_wrlock(&cachelock);
+            debug_printf("Unlocking the cache to re-lock for update\n");
+            pthread_rwlock_unlock(&cachelock);
+
 			updateNode(obj);
-			pthread_rwlock_unlock(&cachelock);
             return ret;
         }
         obj = obj->next;
     }
+    debug_printf("Unlocking the cache from search\n");
     pthread_rwlock_unlock(&cachelock);
     return NULL;
 }
@@ -665,6 +697,7 @@ struct cachenode* get_cache_object(char* hostpath, char* header)
 //clear the cache
 void clear_cache()
 {
+    debug_printf("Locking the cache for clear\n");
     pthread_rwlock_wrlock(&cachelock);
     struct cachenode* n = thecache.head;
     while(n)
@@ -676,6 +709,7 @@ void clear_cache()
     thecache.head = NULL;
     thecache.tail = NULL;
     thecache.totalsize = 0;
+    debug_printf("Unlocking the cache from clear\n");
     pthread_rwlock_unlock(&cachelock);
 }
 
@@ -737,7 +771,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
     //first, get all the headers in the client's request.
     //we can discard most or all of them
     char buffer[MAXLINE];
-    while(Rio_readlineb(proxy_client, buffer, MAXLINE) && 
+    while(t_Rio_readlineb(proxy_client, buffer, MAXLINE) && 
             strncmp(buffer, "\r", 1)){};
 
 
@@ -753,7 +787,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        Rio_writen(connfd, header, strlen(header));
+        t_Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/unnope", 11)==0)
     {
@@ -766,7 +800,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        Rio_writen(connfd, header, strlen(header));
+        t_Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/rickroll", 13)==0)
     {
@@ -779,7 +813,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        Rio_writen(connfd, header, strlen(header));
+        t_Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/norickroll", 15)==0)
     {
@@ -792,7 +826,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        Rio_writen(connfd, header, strlen(header));
+        t_Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/cache/dumb", 15)==0)
     {
@@ -805,7 +839,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        Rio_writen(connfd, header, strlen(header));
+        t_Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/cache/smart", 16)==0)
     {
@@ -818,7 +852,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        Rio_writen(connfd, header, strlen(header));
+        t_Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/set/nocache", 12)==0)
     {
@@ -833,7 +867,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /\r\n\r\n";
-        Rio_writen(connfd, header, strlen(header));
+        t_Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/clearcache", 11)==0)
     {
@@ -844,20 +878,20 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
         //and return to the status page
         char header[] = "HTTP/1.0 302 Found\r\n"
                           "Location: /info\r\n\r\n";
-        Rio_writen(connfd, header, strlen(header));
+        t_Rio_writen(connfd, header, strlen(header));
     }
     else if(strncmp(path, "/info", 5)==0)
     {
         char header[] = "HTTP/1.0 200 OK\r\n"
                           "Content-Type: text/html\r\n\r\n";
-        Rio_writen(connfd, header, strlen(header));
+        t_Rio_writen(connfd, header, strlen(header));
 
         char response[] = "<title>Proxy Diagnostic Page</title>"
                           "<h1>Cache Diagnostics</h1><hr />"
                           "<a href='/clearcache'>Clear the Cache</a>"
                           "<br />"
                           "<a href='/'>Back</a><br />";
-        Rio_writen(connfd, response, strlen(response));
+        t_Rio_writen(connfd, response, strlen(response));
         
         char data[MAXLINE];
         int n = 0;
@@ -883,7 +917,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                       "<table><tr><th>Size</th>"
                       "<th>Object (headers hidden)</th></tr>",
                       2*(int)percentfull, thecache.totalsize, percentfull);
-        Rio_writen(connfd, data, n);
+        t_Rio_writen(connfd, data, n);
 
         struct cachenode* node = thecache.head;
         while(node)
@@ -892,11 +926,11 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                             "<td>%u bytes</td><td>%s</td>"
                             "</tr>", 
                                 node->size, node->objname);
-            Rio_writen(connfd, data, n);
+            t_Rio_writen(connfd, data, n);
             node = node->next;
         }
         n=sprintf(data, "</table>");
-        Rio_writen(connfd, data, n);
+        t_Rio_writen(connfd, data, n);
 
         pthread_rwlock_unlock(&cachelock);
     }
@@ -905,12 +939,12 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
     {
         char header[] = "HTTP/1.0 200 OK\r\n"
                           "Content-Type: text/html\r\n\r\n";
-        Rio_writen(connfd, header, strlen(header));
+        t_Rio_writen(connfd, header, strlen(header));
 
         char response[] = "<title>Features Manager</title>"
                           "<h1>Features Manager</h1><hr />"
                           "<b>The settings:</b><br /><br />";
-        Rio_writen(connfd, response, strlen(response));
+        t_Rio_writen(connfd, response, strlen(response));
 
 
 
@@ -931,7 +965,7 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                                 (ft_config.rickroll)?"on":"off");
 
         pthread_mutex_unlock(&features_mutex);
-        Rio_writen(connfd, dynamiccontent, strlen(dynamiccontent));
+        t_Rio_writen(connfd, dynamiccontent, strlen(dynamiccontent));
 
         char options[] = "<style>"
                          "body{"
@@ -985,11 +1019,11 @@ void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
                          "  </a></td>"
                          "</tr>"
                          "</table>";
-        Rio_writen(connfd, options, strlen(options));
+        t_Rio_writen(connfd, options, strlen(options));
 
         char response2[] = "<br /><hr /><i>This proxy server written by Jeff Cooper and "
                    "Prashant Sridhar, and powered by Caffeine.</i>";
-        Rio_writen(connfd, response2, strlen(response2));
+        t_Rio_writen(connfd, response2, strlen(response2));
     }
 
     close(connfd);
