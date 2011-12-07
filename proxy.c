@@ -262,6 +262,7 @@ void handleConnection(int connfd){
         {
             char name[strlen(hostname)+strlen(path)+1];
             sprintf(name, "%s%s", hostname, path);
+
             struct cachenode* obj = get_cache_object(name, requestheader);
             if(obj)
             {
@@ -584,6 +585,7 @@ void add_cache_object(struct cachenode* obj)
         struct cachenode* end = thecache.tail;
         if(end == NULL)
         {
+            thecache.head = NULL;
             break;
         }
         struct cachenode* newend = end->prev;
@@ -594,6 +596,9 @@ void add_cache_object(struct cachenode* obj)
         if(newend)
             newend->next = NULL;
         thecache.tail = newend;
+        //if we've freed the whole cache, update the head pointer appropriately 
+        if(thecache.tail == NULL)
+            thecache.head = NULL;
         availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize - obj->size;
     }
 
@@ -612,7 +617,6 @@ void add_cache_object(struct cachenode* obj)
     debug_printf("Unlocking the cache from writing\n");
     pthread_rwlock_unlock(&cachelock);
 }
-
 
 void updateNode(struct cachenode *which)
 {
@@ -674,6 +678,7 @@ struct cachenode* get_cache_object(char* hostpath, char* header)
             //after return but before usage
             //
             //it is the caller's responsibility to free it
+            
             struct cachenode* ret = newNode();
             ret->data = malloc(obj->size);
             memcpy(ret->data, obj->data, obj->size);
