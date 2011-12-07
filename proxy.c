@@ -6,7 +6,6 @@
 #include <pthread.h>
 #include <sys/time.h>
 #include <time.h>
-#include <assert.h>
 
 /******************
  ** NOTE: using the thread-friendly version of csapp.*
@@ -17,6 +16,7 @@
  **/
 #include "csapp_threads.h"
 
+#define DEBUG
 #ifndef DEBUG
 #define debug_printf(...) {}
 #else
@@ -54,31 +54,31 @@ pthread_rwlock_t cachelock;
 
 
 //for handling the connection
-void handle_connection(int connfd);
-void* new_connection_thread(void* arg);
+void handleConnection(int connfd);
+void* newConnectionThread(void* arg);
 
 //get the hostname and path from a URL
-void parse_url(char buffer[MAXLINE], char* hostname, char* path, int *port);
+void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port);
 //make a GET request to the server
 //returns whether or not the headers think it's a good idea to cache
-void make_GET_request(char* path,
+void makeGETRequest(char* path,
                     char* buffer,
                     int server_fd);
 //copy the HTTP request from the client to a buffer
-char* copy_request(rio_t* proxy_client);
+char* copyRequest(rio_t* proxy_client);
 //write a buffer to the server
-void write_request(int server_fd, char* buffer);
+void writeRequest(int server_fd, char* buffer);
 //read back from the server to the client
-void serve_to_client(int connfd, rio_t* server_connection, 
+void serveToClient(int connfd, rio_t* server_connection, 
         char* hostname, char* path, int cachestatus, char* cachereq);
 
 
 
 //feature functions
 //take over the connection and print the feature console
-void feature_console(int connfd, rio_t* proxy_client, char path[MAXLINE]);
+void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE]);
 //change the host, request, and port based on feature settings
-int handle_features(char* hostname, char* path, int* port);
+int handleFeatures(char* hostname, char* path, int* port);
 
 //List cache functions
 //add an object to the cache
@@ -92,7 +92,7 @@ void clear_cache();
 //new cachenode
 struct cachenode* newNode();
 //free node
-void free_node(struct cachenode* n);
+void freeNode(struct cachenode* n);
 
 //global cache variable
 struct listcache thecache;
@@ -115,6 +115,8 @@ struct features_t
 };
 struct features_t ft_config;;
 
+
+void sigint_handler(int sig);
 
 int open_clientfd_r(char *hostname, int port) 
 {
@@ -151,7 +153,7 @@ int open_clientfd_r(char *hostname, int port)
 
 int main (int argc, char *argv []){
 	signal(SIGPIPE, SIG_IGN);
-	
+	signal(SIGINT,sigint_handler);
 	int listenfd, connfd, port;
     socklen_t clientlen;
 	struct sockaddr_in clientaddr;
@@ -198,28 +200,28 @@ int main (int argc, char *argv []){
 		connfd = accept(listenfd , (SA *)&clientaddr, &clientlen);
 
 #ifdef SEQUENTIAL
-        handle_connection(connfd);
+        handleConnection(connfd);
 #else
         int* fd_place = malloc(sizeof(int));
         *fd_place = connfd;
         pthread_create(&tid,
                        NULL,
-                       new_connection_thread,
+                       newConnectionThread,
                        (void*)fd_place);
 #endif
     }
 	return 1; //never gets here
 }
-void* new_connection_thread(void* arg)
+void* newConnectionThread(void* arg)
 {
     pthread_detach(pthread_self());
 	int connfd = *(int*)arg;
     free(arg);
-    handle_connection(connfd);
+    handleConnection(connfd);
     return NULL;
 }
 
-void handle_connection(int connfd){
+void handleConnection(int connfd){
     char buffer[MAXLINE];
     memset(buffer, '\0', MAXLINE*sizeof(char));
     rio_t proxy_client;
@@ -239,22 +241,22 @@ void handle_connection(int connfd){
         char hostname[MAXLINE];
         char path[MAXLINE];
         int port=80;
-        parse_url(buffer, hostname, path, &port);
+        parseURL(buffer, hostname, path, &port);
 
         //if we're trying to access the features console
         //  then call the feature handler and end the function
         if((strcmp(hostname, "proxy-configurator") == 0))
         {
             //manage the features
-            feature_console(connfd, &proxy_client, path);
+            featureConsole(connfd, &proxy_client, path);
             //and done
             return;
         }
         //manipulate the request based on the features
         //get the cache status: 1 = dumb, 2 = smart, 0 = off
-        int cachestatus = handle_features(hostname, path, &port);
+        int cachestatus = handleFeatures(hostname, path, &port);
 
-        char* requestheader = copy_request(&proxy_client);
+        char* requestheader = copyRequest(&proxy_client);
 
        
         //search the cache
@@ -262,7 +264,6 @@ void handle_connection(int connfd){
         {
             char name[strlen(hostname)+strlen(path)+1];
             sprintf(name, "%s%s", hostname, path);
-
             struct cachenode* obj = get_cache_object(name, requestheader);
             if(obj)
             {
@@ -271,7 +272,7 @@ void handle_connection(int connfd){
 
                 
                 t_Rio_writen(connfd, obj->data, obj->size);
-                free_node(obj);
+                freeNode(obj);
 
                 close(connfd);
                 return;
@@ -301,11 +302,11 @@ void handle_connection(int connfd){
         t_Rio_readinitb(&server_connection, server_fd);
 
         //now, make the GET request to the server
-        make_GET_request(path,requestheader, server_fd);
+        makeGETRequest(path,requestheader, server_fd);
 
         
         //now read from the server back to the client
-        serve_to_client(connfd, &server_connection, hostname, 
+        serveToClient(connfd, &server_connection, hostname, 
             path, cachestatus, requestheader);
 
         //clean up
@@ -322,7 +323,7 @@ void handle_connection(int connfd){
 }
 
 //parse a URL and set the hostname and path into the given buffers
-void parse_url(char buffer[MAXLINE], char* hostname, char* path, int *port)
+void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port)
 {
     //now let's copy out the hostname
 
@@ -357,7 +358,7 @@ void parse_url(char buffer[MAXLINE], char* hostname, char* path, int *port)
 
 //copy request headers from the client into a buffer
 //guaranteed to be complete lines
-char* copy_request(rio_t* proxy_client)
+char* copyRequest(rio_t* proxy_client)
 {
     int currentsize = MAX_OBJECT_SIZE;
     char* tempbuffer = malloc(sizeof(char)*currentsize);
@@ -386,12 +387,12 @@ char* copy_request(rio_t* proxy_client)
     return requestheaders;
 }
 
-void write_request(int server_fd, char* buffer)
+void writeRequest(int server_fd, char* buffer)
 {
     t_Rio_writen(server_fd, buffer, strlen(buffer));
    	t_Rio_writen(server_fd, "\r\n", 2);
 }
-void make_GET_request(char* path,
+void makeGETRequest(char* path,
                     char* buffer,
                     int server_fd)
 {
@@ -404,11 +405,11 @@ void make_GET_request(char* path,
 
     verbose_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
 
-    write_request(server_fd, buffer);
+    writeRequest(server_fd, buffer);
 
 }
 
-void serve_to_client(int connfd, rio_t* server_connection, 
+void serveToClient(int connfd, rio_t* server_connection, 
         char* hostname, char* path, int cachestatus, char* cachereq)
 {
     int shouldcache = 0; //smart caching: do the headers say we should cache?
@@ -493,7 +494,7 @@ void serve_to_client(int connfd, rio_t* server_connection,
             //@TODO: fails often. dunno why
 			printf("Error writing from %s%s\n", hostname, path);
             //error on write
-            free_node(cacheobj);
+            freeNode(cacheobj);
 			return;
         }
 		//n=sprintf(tempbuffer+bufferpos, "%s", buffer);
@@ -517,7 +518,7 @@ void serve_to_client(int connfd, rio_t* server_connection,
 	debug_printf("size = %d\n",(int)(cacheobj->size));
 	if(cacheobj->size >= MAX_OBJECT_SIZE)
 	{
-        free_node(cacheobj);
+        freeNode(cacheobj);
         cacheobj = NULL;
 	}
 	
@@ -548,13 +549,13 @@ void serve_to_client(int connfd, rio_t* server_connection,
             {
                 //smart caching says no
                 debug_printf("Smart cache: skipping the cache\n");
-                free_node(cacheobj);
+                freeNode(cacheobj);
             }
         }
         else
         {
             debug_printf("Cache disabled: skipping the cache\n");
-            free_node(cacheobj);
+            freeNode(cacheobj);
         }
     }
     else
@@ -572,12 +573,33 @@ void add_cache_object(struct cachenode* obj)
 {
     if(obj->size > MAX_OBJECT_SIZE)
     {
-        free_node(obj);
+        freeNode(obj);
         printf("Discarded object: too big\n");
         return; //discard it
     }
     debug_printf("Write locking the cache to add an object\n");
     pthread_rwlock_wrlock(&cachelock);
+    int availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize;
+    availablesize -= (int)obj->size;
+
+    while(availablesize < 0)
+    {
+        //while there's not enough space, knock out oldest entry
+        struct cachenode* end = thecache.tail;
+        if(end == NULL)
+        {
+            break;
+        }
+        struct cachenode* newend = end->prev;
+        thecache.totalsize = thecache.totalsize - end->size;
+        debug_printf("Freed %d bytes from the cache\n", end->size);
+
+        freeNode(end);
+        if(newend)
+            newend->next = NULL;
+        thecache.tail = newend;
+        availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize - obj->size;
+    }
 
     //now add the new entry to the front of the list
     obj->prev = NULL;
@@ -589,40 +611,14 @@ void add_cache_object(struct cachenode* obj)
         thecache.tail = obj;
     thecache.totalsize += obj->size;
 
-
-    int availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize;
-    while(availablesize < 0)
-    {
-        //while there's not enough space, knock out oldest entry
-        struct cachenode* end = thecache.tail;
-        if(end == NULL)
-        {
-            thecache.head = NULL;
-            break;
-        }
-        struct cachenode* newend = end->prev;
-        thecache.totalsize = thecache.totalsize - end->size;
-        debug_printf("Freed %d bytes from the cache\n", end->size);
-
-        free_node(end);
-        if(newend)
-            newend->next = NULL;
-        thecache.tail = newend;
-        //if we've freed the whole cache, update the head pointer appropriately 
-        if(thecache.tail == NULL)
-            thecache.head = NULL;
-        availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize;
-    }
-
     debug_printf("\tNew total cache size is %u\n", thecache.totalsize);
-    assert(thecache.totalsize <= MAX_CACHE_SIZE);
-
+    
     debug_printf("Unlocking the cache from writing\n");
     pthread_rwlock_unlock(&cachelock);
 }
 
 
-void update_node(struct cachenode *which)
+void updateNode(struct cachenode *which)
 {
     debug_printf("Locking the cache to update LRU\n");
     pthread_rwlock_wrlock(&cachelock);
@@ -661,14 +657,14 @@ void update_node(struct cachenode *which)
 	thecache.head = obj;
     pthread_rwlock_unlock(&cachelock);
     debug_printf("Unlocked the cache from LRU update\n");
+		
 }
-
 //find an object in the cache based on header, and update LRU
 //return NULL if not found
 struct cachenode* get_cache_object(char* hostpath, char* header)
 {
     debug_printf("Read-locking the cache to search it\n");
-    pthread_rwlock_rdlock(&cachelock);
+    pthread_rwlock_wrlock(&cachelock);
     debug_printf("\tGot lock\n");
     struct cachenode* obj = thecache.head;
     while(obj)
@@ -682,7 +678,6 @@ struct cachenode* get_cache_object(char* hostpath, char* header)
             //after return but before usage
             //
             //it is the caller's responsibility to free it
-            
             struct cachenode* ret = newNode();
             ret->data = malloc(obj->size);
             memcpy(ret->data, obj->data, obj->size);
@@ -692,7 +687,7 @@ struct cachenode* get_cache_object(char* hostpath, char* header)
             debug_printf("Unlocking the cache to re-lock for update\n");
             pthread_rwlock_unlock(&cachelock);
 
-			update_node(obj);
+			updateNode(obj);
             return ret;
         }
         obj = obj->next;
@@ -712,7 +707,7 @@ void clear_cache()
     while(n)
     {
         struct cachenode* next = n->next;
-        free_node(n);
+        freeNode(n);
         n = next;
     }
     thecache.head = NULL;
@@ -733,19 +728,27 @@ struct cachenode* newNode()
     return n;
 }
 //free node
-void free_node(struct cachenode* n)
+void freeNode(struct cachenode* n)
 {
     free(n->header);
     free(n->objname);
     free(n->data);
     free(n);
 }
+
+void sigint_handler(int sig){
+	sig=sig;
+	clear_cache();
+	pthread_rwlock_destroy(&cachelock);
+	pthread_mutex_destroy(&features_mutex);
+	exit(0);
+}
 /*************
  ** Feature Functions
  ** Not related to the core functionality of the proxy
  *************/
 //returns whether or not caching is enabled
-int handle_features(char* hostname, char* path, int* port)
+int handleFeatures(char* hostname, char* path, int* port)
 {
     //@TODO: reader/writer lock on features
     struct features_t features;
@@ -775,7 +778,7 @@ int handle_features(char* hostname, char* path, int* port)
     }
     return features.cache;
 }
-void feature_console(int connfd, rio_t* proxy_client, char path[MAXLINE])
+void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
 {
     //first, get all the headers in the client's request.
     //we can discard most or all of them
@@ -896,7 +899,10 @@ void feature_console(int connfd, rio_t* proxy_client, char path[MAXLINE])
         t_Rio_writen(connfd, header, strlen(header));
 
         char response[] = "<title>Proxy Diagnostic Page</title>"
-                          "<h1>Cache Diagnostics</h1><hr />";
+                          "<h1>Cache Diagnostics</h1><hr />"
+                          "<a href='/clearcache'>Clear the Cache</a>"
+                          "<br />"
+                          "<a href='/'>Back</a><br />";
         t_Rio_writen(connfd, response, strlen(response));
         
         char data[MAXLINE];
@@ -914,63 +920,19 @@ void feature_console(int connfd, rio_t* proxy_client, char path[MAXLINE])
                       "style='width:%dpx;background-color:red;height:30px;'>"
                       "</div></div>"
                       "Total cache size is <b>%u bytes (%.2f%%)</b>"
+                      "<br /><br />"
                       "<style>"
                       "table{table-layout: fixed;}"
                       "td{width: 45%%;}"
-                      "</style>", 
+                      "</style>"
+                      "Here's what's in the cache (in order):<br />"
+                      "<table><tr><th>Size</th>"
+                      "<th>Object (headers hidden)</th></tr>",
                       2*(int)percentfull, thecache.totalsize, percentfull);
-        t_Rio_writen(connfd, data, n);
-
-        char options[] = "<style>"
-                         "body{"
-                         "  font-family: sans-serif;"
-                         "}"
-                         ".options td{ "
-                         "  border: 1px black solid;"
-                         "  margin-right: 10px;"
-                         "  background-color: lightgray;"
-                         "  font-weight: bold;"
-                         "}"
-                         ".options a:link, a:visited{"
-                         "  text-decoration: none;"
-                         "  color: black;"
-                         "}"
-                         ".options a:hover{"
-                         "  text-decoration: none;"
-                         "  color: red;"
-                         "}"
-                         "</style>"
-                         "<br /><table class='options'>"
-                         "<tr>"
-                         "  <td><a href='/set/cache/dumb'>"
-                         "      Engage Dumb Caching"
-                         "  </a></td>"
-                         "  <td><a href='/set/cache/smart'>"
-                         "      Engage Smart Caching"
-                         "  </a></td>"
-                         "</tr>"
-                         "<tr>"
-                         "  <td><a href='/set/nocache'>"
-                         "      Disable Caching"
-                         "  </a></td>"
-                         "  <td><a href='/'>"
-                         "      Main Control Panel"
-                         "  </a></td>"
-                         "</tr>"
-                         "<tr>"
-                         "  <td colspan='2'><center><a href='/clearcache'>"
-                         "      Clear the Cache"
-                         "  </a></center></td>"
-                         "</tr>"
-                         "</table>"
-                         "<br /><br />"
-                         "Here's what's in the cache (in order):<br />"
-                         "<table><tr><th>Size</th>"
-                         "<th>Object (headers hidden)</th></tr>";
-        t_Rio_writen(connfd, options, strlen(options));
 
         //if the thread dies on read (pthread_exit), have it unlock the cache
-        pthread_cleanup_push(pthread_rwlock_unlock, (void*)&cachelock);
+        pthread_cleanup_push(pthread_rwlock_unlock, &cachelock);
+        t_Rio_writen(connfd, data, n);
 
 
         struct cachenode* node = thecache.head;
