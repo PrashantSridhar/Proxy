@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <sys/time.h>
 #include <time.h>
+#include <assert.h>
 
 /******************
  ** NOTE: using the thread-friendly version of csapp.*
@@ -54,31 +55,31 @@ pthread_rwlock_t cachelock;
 
 
 //for handling the connection
-void handleConnection(int connfd);
-void* newConnectionThread(void* arg);
+void handle_connection(int connfd);
+void* new_connection_thread(void* arg);
 
 //get the hostname and path from a URL
-void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port);
+void parse_url(char buffer[MAXLINE], char* hostname, char* path, int *port);
 //make a GET request to the server
 //returns whether or not the headers think it's a good idea to cache
-void makeGETRequest(char* path,
+void make_GET_request(char* path,
                     char* buffer,
                     int server_fd);
 //copy the HTTP request from the client to a buffer
-char* copyRequest(rio_t* proxy_client);
+char* copy_request(rio_t* proxy_client);
 //write a buffer to the server
-void writeRequest(int server_fd, char* buffer);
+void write_request(int server_fd, char* buffer);
 //read back from the server to the client
-void serveToClient(int connfd, rio_t* server_connection, 
+void serve_to_client(int connfd, rio_t* server_connection, 
         char* hostname, char* path, int cachestatus, char* cachereq);
 
 
 
 //feature functions
 //take over the connection and print the feature console
-void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE]);
+void feature_console(int connfd, rio_t* proxy_client, char path[MAXLINE]);
 //change the host, request, and port based on feature settings
-int handleFeatures(char* hostname, char* path, int* port);
+int handle_features(char* hostname, char* path, int* port);
 
 //List cache functions
 //add an object to the cache
@@ -92,7 +93,7 @@ void clear_cache();
 //new cachenode
 struct cachenode* newNode();
 //free node
-void freeNode(struct cachenode* n);
+void free_node(struct cachenode* n);
 
 //global cache variable
 struct listcache thecache;
@@ -198,28 +199,28 @@ int main (int argc, char *argv []){
 		connfd = accept(listenfd , (SA *)&clientaddr, &clientlen);
 
 #ifdef SEQUENTIAL
-        handleConnection(connfd);
+        handle_connection(connfd);
 #else
         int* fd_place = malloc(sizeof(int));
         *fd_place = connfd;
         pthread_create(&tid,
                        NULL,
-                       newConnectionThread,
+                       new_connection_thread,
                        (void*)fd_place);
 #endif
     }
 	return 1; //never gets here
 }
-void* newConnectionThread(void* arg)
+void* new_connection_thread(void* arg)
 {
     pthread_detach(pthread_self());
 	int connfd = *(int*)arg;
     free(arg);
-    handleConnection(connfd);
+    handle_connection(connfd);
     return NULL;
 }
 
-void handleConnection(int connfd){
+void handle_connection(int connfd){
     char buffer[MAXLINE];
     memset(buffer, '\0', MAXLINE*sizeof(char));
     rio_t proxy_client;
@@ -239,22 +240,22 @@ void handleConnection(int connfd){
         char hostname[MAXLINE];
         char path[MAXLINE];
         int port=80;
-        parseURL(buffer, hostname, path, &port);
+        parse_url(buffer, hostname, path, &port);
 
         //if we're trying to access the features console
         //  then call the feature handler and end the function
         if((strcmp(hostname, "proxy-configurator") == 0))
         {
             //manage the features
-            featureConsole(connfd, &proxy_client, path);
+            feature_console(connfd, &proxy_client, path);
             //and done
             return;
         }
         //manipulate the request based on the features
         //get the cache status: 1 = dumb, 2 = smart, 0 = off
-        int cachestatus = handleFeatures(hostname, path, &port);
+        int cachestatus = handle_features(hostname, path, &port);
 
-        char* requestheader = copyRequest(&proxy_client);
+        char* requestheader = copy_request(&proxy_client);
 
        
         //search the cache
@@ -270,7 +271,7 @@ void handleConnection(int connfd){
 
                 
                 t_Rio_writen(connfd, obj->data, obj->size);
-                freeNode(obj);
+                free_node(obj);
 
                 close(connfd);
                 return;
@@ -288,6 +289,7 @@ void handleConnection(int connfd){
 
 
         //open the connection to the remote server
+		//pthread_rwlock_rdlock(&cachelock);
 		if((server_fd = open_clientfd_r(hostname, port)) < 0)
         {
             char errorbuf[] = "HTTP 404 NOTFOUND\r\n\r\n404 Not Found\r\n";
@@ -295,14 +297,15 @@ void handleConnection(int connfd){
             close(connfd);
             return;
         }
+		//pthread_rwlock_rdlock(&cachelock);
         t_Rio_readinitb(&server_connection, server_fd);
 
         //now, make the GET request to the server
-        makeGETRequest(path,requestheader, server_fd);
+        make_GET_request(path,requestheader, server_fd);
 
         
         //now read from the server back to the client
-        serveToClient(connfd, &server_connection, hostname, 
+        serve_to_client(connfd, &server_connection, hostname, 
             path, cachestatus, requestheader);
 
         //clean up
@@ -319,7 +322,7 @@ void handleConnection(int connfd){
 }
 
 //parse a URL and set the hostname and path into the given buffers
-void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port)
+void parse_url(char buffer[MAXLINE], char* hostname, char* path, int *port)
 {
     //now let's copy out the hostname
 
@@ -354,7 +357,7 @@ void parseURL(char buffer[MAXLINE], char* hostname, char* path, int *port)
 
 //copy request headers from the client into a buffer
 //guaranteed to be complete lines
-char* copyRequest(rio_t* proxy_client)
+char* copy_request(rio_t* proxy_client)
 {
     int currentsize = MAX_OBJECT_SIZE;
     char* tempbuffer = malloc(sizeof(char)*currentsize);
@@ -383,12 +386,12 @@ char* copyRequest(rio_t* proxy_client)
     return requestheaders;
 }
 
-void writeRequest(int server_fd, char* buffer)
+void write_request(int server_fd, char* buffer)
 {
     t_Rio_writen(server_fd, buffer, strlen(buffer));
    	t_Rio_writen(server_fd, "\r\n", 2);
 }
-void makeGETRequest(char* path,
+void make_GET_request(char* path,
                     char* buffer,
                     int server_fd)
 {
@@ -401,11 +404,11 @@ void makeGETRequest(char* path,
 
     verbose_printf("->\t%s%s HTTP/1.0 \r\n", "GET ", path);
 
-    writeRequest(server_fd, buffer);
+    write_request(server_fd, buffer);
 
 }
 
-void serveToClient(int connfd, rio_t* server_connection, 
+void serve_to_client(int connfd, rio_t* server_connection, 
         char* hostname, char* path, int cachestatus, char* cachereq)
 {
     int shouldcache = 0; //smart caching: do the headers say we should cache?
@@ -490,7 +493,7 @@ void serveToClient(int connfd, rio_t* server_connection,
             //@TODO: fails often. dunno why
 			printf("Error writing from %s%s\n", hostname, path);
             //error on write
-            freeNode(cacheobj);
+            free_node(cacheobj);
 			return;
         }
 		//n=sprintf(tempbuffer+bufferpos, "%s", buffer);
@@ -514,7 +517,7 @@ void serveToClient(int connfd, rio_t* server_connection,
 	debug_printf("size = %d\n",(int)(cacheobj->size));
 	if(cacheobj->size >= MAX_OBJECT_SIZE)
 	{
-        freeNode(cacheobj);
+        free_node(cacheobj);
         cacheobj = NULL;
 	}
 	
@@ -545,13 +548,13 @@ void serveToClient(int connfd, rio_t* server_connection,
             {
                 //smart caching says no
                 debug_printf("Smart cache: skipping the cache\n");
-                freeNode(cacheobj);
+                free_node(cacheobj);
             }
         }
         else
         {
             debug_printf("Cache disabled: skipping the cache\n");
-            freeNode(cacheobj);
+            free_node(cacheobj);
         }
     }
     else
@@ -569,7 +572,7 @@ void add_cache_object(struct cachenode* obj)
 {
     if(obj->size > MAX_OBJECT_SIZE)
     {
-        freeNode(obj);
+        free_node(obj);
         printf("Discarded object: too big\n");
         return; //discard it
     }
@@ -590,7 +593,7 @@ void add_cache_object(struct cachenode* obj)
         thecache.totalsize = thecache.totalsize - end->size;
         debug_printf("Freed %d bytes from the cache\n", end->size);
 
-        freeNode(end);
+        free_node(end);
         if(newend)
             newend->next = NULL;
         thecache.tail = newend;
@@ -608,13 +611,15 @@ void add_cache_object(struct cachenode* obj)
     thecache.totalsize += obj->size;
 
     debug_printf("\tNew total cache size is %u\n", thecache.totalsize);
-    
+    assert(thecache.totalsize <= MAX_CACHE_SIZE);
+
     debug_printf("Unlocking the cache from writing\n");
+    debug_printf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
     pthread_rwlock_unlock(&cachelock);
 }
 
 
-void updateNode(struct cachenode *which)
+void update_node(struct cachenode *which)
 {
     debug_printf("Locking the cache to update LRU\n");
     pthread_rwlock_wrlock(&cachelock);
@@ -653,8 +658,8 @@ void updateNode(struct cachenode *which)
 	thecache.head = obj;
     pthread_rwlock_unlock(&cachelock);
     debug_printf("Unlocked the cache from LRU update\n");
-		
 }
+
 //find an object in the cache based on header, and update LRU
 //return NULL if not found
 struct cachenode* get_cache_object(char* hostpath, char* header)
@@ -683,7 +688,7 @@ struct cachenode* get_cache_object(char* hostpath, char* header)
             debug_printf("Unlocking the cache to re-lock for update\n");
             pthread_rwlock_unlock(&cachelock);
 
-			updateNode(obj);
+			update_node(obj);
             return ret;
         }
         obj = obj->next;
@@ -703,7 +708,7 @@ void clear_cache()
     while(n)
     {
         struct cachenode* next = n->next;
-        freeNode(n);
+        free_node(n);
         n = next;
     }
     thecache.head = NULL;
@@ -724,7 +729,7 @@ struct cachenode* newNode()
     return n;
 }
 //free node
-void freeNode(struct cachenode* n)
+void free_node(struct cachenode* n)
 {
     free(n->header);
     free(n->objname);
@@ -736,7 +741,7 @@ void freeNode(struct cachenode* n)
  ** Not related to the core functionality of the proxy
  *************/
 //returns whether or not caching is enabled
-int handleFeatures(char* hostname, char* path, int* port)
+int handle_features(char* hostname, char* path, int* port)
 {
     //@TODO: reader/writer lock on features
     struct features_t features;
@@ -766,7 +771,7 @@ int handleFeatures(char* hostname, char* path, int* port)
     }
     return features.cache;
 }
-void featureConsole(int connfd, rio_t* proxy_client, char path[MAXLINE])
+void feature_console(int connfd, rio_t* proxy_client, char path[MAXLINE])
 {
     //first, get all the headers in the client's request.
     //we can discard most or all of them
