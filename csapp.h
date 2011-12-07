@@ -1,6 +1,14 @@
+/*****
+ ** THIS IS A MODIFIED VERSION OF THE CSAPP.H FILE
+ ** IT HAS BEEN MODIFIED TO BE COMPATIBLE WITH THREADED PROGRAMS
+ **/
+
 /* $begin csapp.h */
-#ifndef __CSAPP_H__
-#define __CSAPP_H__
+#ifdef __CSAPP_H__
+#error Do not use csapp.h with csapp_threads.h
+#endif
+#ifndef __CSAPP_THREADS_H_
+#define __CSAPP_THREADS_H__
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -150,11 +158,11 @@ ssize_t	rio_readnb(rio_t *rp, void *usrbuf, size_t n);
 ssize_t	rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen);
 
 /* Wrappers for Rio package */
-ssize_t Rio_readn(int fd, void *usrbuf, size_t n);
-void Rio_writen(int fd, void *usrbuf, size_t n);
-void Rio_readinitb(rio_t *rp, int fd); 
-ssize_t Rio_readnb(rio_t *rp, void *usrbuf, size_t n);
-ssize_t Rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen);
+ssize_t t_Rio_readn(int fd, void *usrbuf, size_t n);
+void t_Rio_writen(int fd, void *usrbuf, size_t n);
+void t_Rio_readinitb(rio_t *rp, int fd); 
+ssize_t t_Rio_readnb(rio_t *rp, void *usrbuf, size_t n);
+ssize_t t_Rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen);
 
 /* Client/server helper functions */
 int open_clientfd(char *hostname, int portno);

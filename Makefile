@@ -4,13 +4,13 @@ LDFLAGS = -lpthread
 
 all: proxy
 
-csapp_threads.o: csapp_threads.c csapp_threads.h
-	$(CC) $(CFLAGS) -c csapp_threads.c
+csapp.o: csapp.c csapp.h
+	$(CC) $(CFLAGS) -c csapp.c
 
-proxy.o: proxy.c csapp_threads.h
+proxy.o: proxy.c csapp.h
 	$(CC) $(CFLAGS) -c proxy.c
 
-proxy: proxy.o csapp_threads.o
+proxy: proxy.o csapp.o
 
 submit:
 	(make clean; cd ..; tar czvf proxylab.tar.gz proxylab-handout)

@@ -1,3 +1,7 @@
+/**************
+ ** Modified version to be thread_safer
+ **
+ **/
 /* $begin csapp.c */
 #include "csapp.h"
 
@@ -9,26 +13,26 @@
 void unix_error(char *msg) /* unix-style error */
 {
     fprintf(stderr, "%s: %s\n", msg, strerror(errno));
-    exit(0);
+    pthread_exit(NULL);
 }
 /* $end unixerror */
 
 void posix_error(int code, char *msg) /* posix-style error */
 {
     fprintf(stderr, "%s: %s\n", msg, strerror(code));
-    exit(0);
+    pthread_exit(NULL);
 }
 
 void dns_error(char *msg) /* dns-style error */
 {
     fprintf(stderr, "%s: DNS error %d\n", msg, h_errno);
-    exit(0);
+    pthread_exit(NULL);
 }
 
 void app_error(char *msg) /* application error */
 {
     fprintf(stderr, "%s\n", msg);
-    exit(0);
+    pthread_exit(NULL);
 }
 /* $end errorfuns */
 
@@ -91,10 +95,10 @@ void Pause()
 
 unsigned int Sleep(unsigned int secs) 
 {
-    unsigned int rc;
+    int rc;
 
     if ((rc = sleep(secs)) < 0)
-	unix_error("Sleep error");
+        unix_error("Sleep error");
     return rc;
 }
 
@@ -601,8 +605,8 @@ static ssize_t rio_read(rio_t *rp, char *usrbuf, size_t n)
 
     /* Copy min(n, rp->rio_cnt) bytes from internal buf to user buf */
     cnt = n;          
-    if (rp->rio_cnt < n)   
-	cnt = rp->rio_cnt;
+    if ((unsigned)rp->rio_cnt < n)   
+        cnt = rp->rio_cnt;
     memcpy(usrbuf, rp->rio_bufptr, cnt);
     rp->rio_bufptr += cnt;
     rp->rio_cnt -= cnt;
@@ -657,7 +661,7 @@ ssize_t rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen)
     int n, rc;
     char c, *bufp = usrbuf;
 
-    for (n = 1; n < maxlen; n++) { 
+    for (n = 1; n < (int)maxlen; n++) { 
 	if ((rc = rio_read(rp, &c, 1)) == 1) {
 	    *bufp++ = c;
 	    if (c == '\n')
@@ -678,41 +682,41 @@ ssize_t rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen)
 /**********************************
  * Wrappers for robust I/O routines
  **********************************/
-ssize_t Rio_readn(int fd, void *ptr, size_t nbytes) 
+ssize_t t_Rio_readn(int fd, void *ptr, size_t nbytes) 
 {
     ssize_t n;
   
     if ((n = rio_readn(fd, ptr, nbytes)) < 0)
-	unix_error("Rio_readn error");
+	unix_error("t_Rio_readn error");
     return n;
 }
 
-void Rio_writen(int fd, void *usrbuf, size_t n) 
+void t_Rio_writen(int fd, void *usrbuf, size_t n) 
 {
-    if (rio_writen(fd, usrbuf, n) != n)
-	unix_error("Rio_writen error");
+    if (rio_writen(fd, usrbuf, n) != (int)n)
+	unix_error("t_Rio_writen error");
 }
 
-void Rio_readinitb(rio_t *rp, int fd)
+void t_Rio_readinitb(rio_t *rp, int fd)
 {
     rio_readinitb(rp, fd);
 } 
 
-ssize_t Rio_readnb(rio_t *rp, void *usrbuf, size_t n) 
+ssize_t t_Rio_readnb(rio_t *rp, void *usrbuf, size_t n) 
 {
     ssize_t rc;
 
     if ((rc = rio_readnb(rp, usrbuf, n)) < 0)
-	unix_error("Rio_readnb error");
+	unix_error("t_Rio_readnb error");
     return rc;
 }
 
-ssize_t Rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen) 
+ssize_t t_Rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen) 
 {
     ssize_t rc;
 
     if ((rc = rio_readlineb(rp, usrbuf, maxlen)) < 0)
-	unix_error("Rio_readlineb error");
+	unix_error("t_Rio_readlineb error");
     return rc;
 } 
 
