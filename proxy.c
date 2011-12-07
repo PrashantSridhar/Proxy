@@ -592,13 +592,13 @@ void add_cache_object(struct cachenode* obj)
     thecache.totalsize += obj->size;
 
 
-    int availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize;
-    while(availablesize < 0)
+    while(thecache.totalsize > MAX_CACHE_SIZE)
     {
         //while there's not enough space, knock out oldest entry
         struct cachenode* end = thecache.tail;
         if(end == NULL)
         {
+            thecache.totalsize = 0;
             thecache.head = NULL;
             break;
         }
@@ -612,12 +612,13 @@ void add_cache_object(struct cachenode* obj)
         thecache.tail = newend;
         //if we've freed the whole cache, update the head pointer appropriately 
         if(thecache.tail == NULL)
+        {
             thecache.head = NULL;
-        availablesize = MAX_CACHE_SIZE - (int)thecache.totalsize;
+            thecache.totalsize = 0;
+        }
     }
 
     debug_printf("\tNew total cache size is %u\n", thecache.totalsize);
-    assert(thecache.totalsize <= MAX_CACHE_SIZE);
 
     debug_printf("Unlocking the cache from writing\n");
     pthread_rwlock_unlock(&cachelock);
